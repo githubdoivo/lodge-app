@@ -51,8 +51,8 @@ if [[ -z "$token" ]]; then
 fi
 export FLY_API_TOKEN="$token"
 
-echo "Running tests before deploy..."
-npm test
+# SKIP_TESTS=1 only for code that just passed (e.g. demo right after the same commit went to qa)
+if [[ "${SKIP_TESTS:-}" == "1" ]]; then echo "Skipping tests (SKIP_TESTS=1)."; else echo "Running tests before deploy..."; npm test; fi
 
 if [[ "$target" == "qa" ]]; then
   fly deploy -a lodge-qa --config fly.qa.toml
