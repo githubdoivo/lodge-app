@@ -2172,6 +2172,7 @@ test('a dropped connection says so, instead of the screen quietly going still', 
   // suite's default wait, which is shorter than one round trip of that.
   await page.waitForSelector('#offline-banner:not(.hidden)', { timeout: Math.max(WAIT_TIMEOUT, 12000) });
   const text = (await page.textContent('#offline-banner')).trim();
+  assert.notEqual(await page.$eval('#offline-banner', (e) => getComputedStyle(e).position), 'fixed', 'in the page, not pinned to the screen edge (APP-12)');
   assert.ok(text.length > 0, 'the banner has to actually say something');
   assert.equal(text, text.toLowerCase(), 'lowercase, like the rest of the app');
 

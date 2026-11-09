@@ -3323,16 +3323,15 @@ textarea:focus-visible {
 }
 
 
-/* Deliberately a strip at the bottom rather than a modal or a toast: it is
-   a background condition, not an event, and it must not cover anything or
-   demand a dismissal. It stays put until the connection comes back on its
-   own. */
+/* A background condition, not an event: a quiet strip at the top of the app
+   that covers nothing and needs no dismissal; it goes when the connection
+   comes back. In the page, not pinned: iPhone Safari (iOS 26) paints a solid
+   band over anything fixed to the screen edges (APP-12). */
 .offline-banner {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  z-index: 60;
+  position: relative;
+  display: block;
+  width: fit-content;
+  margin: 8px auto 4px;
   max-width: calc(100% - 24px);
   padding: 8px 16px;
   border-radius: 999px;
