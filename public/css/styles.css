@@ -3381,3 +3381,12 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 @media (max-height: 700px) {
   #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover { padding-top: calc(var(--above) + 100lvh * .30); }
 }
+
+/* Wide screens: the sign-in stack stands on the grass below the cottage, not in
+   front of it (IVO-4). The empty error line stops reserving its height there
+   (an error, when shown, just lifts the stack), and the gaps tighten a little. */
+@media (min-width: 700px) and (min-aspect-ratio: 1/1) {
+  #login:not(.hidden) .cover { gap: 14px; }
+  #login:not(.hidden) #login-error:empty { display: none; }
+  #login:not(.hidden) #demo-keys { margin-top: 0; }
+}
