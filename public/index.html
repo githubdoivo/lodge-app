@@ -84,6 +84,11 @@
 
   <!-- App -->
   <section id="app" class="view hidden">
+    <!-- Reachability, surfaced once instead of in every poller - see
+         onConnectionChange() in api.js. role="status" so it is announced
+         without stealing focus mid-tap. In the page, not pinned (APP-12). -->
+    <div id="offline-banner" class="offline-banner hidden" role="status" aria-live="polite"
+         data-i18n="offline_banner">Sem ligação</div>
     <header class="topbar">
       <div class="brand">
         <h1 class="brand-name">lodgedoivo</h1>
@@ -300,11 +305,6 @@
     </div>
   </div>
 
-  <!-- Reachability, surfaced once instead of in every poller - see
-       onConnectionChange() in api.js. role="status" so it is announced
-       without stealing focus mid-tap. -->
-  <div id="offline-banner" class="offline-banner hidden" role="status" aria-live="polite"
-       data-i18n="offline_banner">Sem ligação</div>
   <span id="version-badge" class="version-badge" aria-hidden="true"></span>
 
   <script type="module" src="/js/app.js"></script>
