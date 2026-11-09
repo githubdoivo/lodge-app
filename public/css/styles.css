@@ -3384,9 +3384,10 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 
 /* Wide screens: the sign-in stack stands on the grass below the cottage, not in
    front of it (IVO-4). The empty error line stops reserving its height there
-   (an error, when shown, just lifts the stack), and the gaps tighten a little. */
+   (an error, when shown, just lifts the stack); the words get a soft shadow to read over the paint. */
 @media (min-width: 700px) and (min-aspect-ratio: 1/1) {
-  #login:not(.hidden) .cover { gap: 14px; }
   #login:not(.hidden) #login-error:empty { display: none; }
   #login:not(.hidden) #demo-keys { margin-top: 0; }
+  /* words over the painting stay readable */
+  #login:not(.hidden) .greeting, #login:not(.hidden) .login-meta, #login:not(.hidden) .demo-keys-help, #login:not(.hidden) #find-key-link { text-shadow: 0 1px 2px rgba(6, 12, 5, .95), 0 0 14px rgba(6, 12, 5, .8); }
 }
