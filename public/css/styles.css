@@ -3403,8 +3403,11 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 /* The version badge is a full-width strip at the foot of the sign-in; it only shows a number, so taps go
    through it - it was swallowing "find your key" once the sign-in moved lower (APP-LG-002). */
 .version-badge { pointer-events: none; }
-/* Looking up your key by name: the demo keys step aside so the results sit right under the field */
-#login.finding #demo-keys { display: none; }
+/* Looking up your key by name (APP-LG-002): nothing moves. Entrar, the error line and the demo keys keep
+   their space but step out of sight, and the results float right under the field, over that space. */
+#login.finding #login-submit-btn, #login.finding #login-error, #login.finding #demo-keys { visibility: hidden; }
+.password-field > #find-key-results { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-width: none; margin: 0; z-index: 5; max-height: 45vh; overflow-y: auto; }
+.password-field > #find-key-results .muted { margin: 0; padding: 10px 14px; border-radius: 10px; background: rgba(20, 16, 12, .88); color: var(--ink); }
 /* With the demo keys on screen (and "find your key" now above them), the empty error line stops
    reserving its height: on short phones it pushed the keys off the bottom. An error, when shown,
    only moves what's below it. */

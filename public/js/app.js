@@ -410,7 +410,7 @@ function setFindKeyMode(on) {
   // Find-key mode never uses this line (no password to reject) - its
   // reserved empty-line height was pushing the results away from the
   // search bar they belong to.
-  $('login-error').classList.toggle('hidden', on);
+  // (the error line and Entrar keep their place while searching - see #login.finding in styles.css)
   $('find-key-results').innerHTML = '';
   $('login').classList.toggle('finding', on);
   input.value = '';
@@ -423,7 +423,7 @@ function setFindKeyMode(on) {
   input.placeholder = t(on ? 'find_key_ph' : 'access_key');
   $('token-toggle').classList.toggle('hidden', on);
   $('token-toggle').classList.remove('visible');
-  $('login-submit-btn').classList.toggle('hidden', on);
+
   $('find-key-link').setAttribute('data-i18n', on ? 'find_key_back' : 'find_key_link');
   $('find-key-link').textContent = t(on ? 'find_key_back' : 'find_key_link');
   if (on) input.focus();
