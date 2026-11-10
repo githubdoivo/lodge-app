@@ -412,6 +412,7 @@ function setFindKeyMode(on) {
   // search bar they belong to.
   $('login-error').classList.toggle('hidden', on);
   $('find-key-results').innerHTML = '';
+  $('login').classList.toggle('finding', on);
   input.value = '';
   input.type = on ? 'text' : 'password';
   // In find-key mode this same box is a name search, not a key - leaving
