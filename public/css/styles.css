@@ -3391,3 +3391,11 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
   /* words over the painting stay readable */
   #login:not(.hidden) .greeting, #login:not(.hidden) .login-meta, #login:not(.hidden) .demo-keys-help, #login:not(.hidden) #find-key-link { text-shadow: 0 1px 2px rgba(6, 12, 5, .95), 0 0 14px rgba(6, 12, 5, .8); }
 }
+
+/* Demo keys say only "a guest" / "an admin", so the buttons are one line and smaller (Ivo, 10 Nov),
+   and on wide screens the whole sign-in sits a little lower on the grass (APP-LG-002). */
+.demo-keys-list .find-key-result { min-height: 44px; padding: 8px 10px; display: grid; place-items: center; }
+@media (min-width: 700px) and (min-aspect-ratio: 1/1) {
+  /* the sign-in hangs from the bottom edge: less padding there lowers the whole stack, greeting included */
+  #login:not(.hidden) .cover { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+}

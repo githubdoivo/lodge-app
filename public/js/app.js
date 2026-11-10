@@ -355,7 +355,8 @@ wirePasswordToggle('token-input', 'token-toggle');
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'find-key-result';
-      btn.innerHTML = `<span data-i18n="demo_role_${esc(k.role)}">${esc(t(`demo_role_${k.role}`))}</span><small>${esc(k.key)}</small>`;
+      // just the role (a guest, an admin): the key itself stays out of sight (Ivo, 10 Nov)
+      btn.innerHTML = `<span data-i18n="demo_role_${esc(k.role)}">${esc(t(`demo_role_${k.role}`))}</span>`;
       btn.addEventListener('click', () => {
         $('token-input').value = k.key;
         $('login-form').requestSubmit();
