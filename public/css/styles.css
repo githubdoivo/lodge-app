@@ -484,7 +484,7 @@ body:has(#login:not(.hidden)) { background-color: #241d17; }
   inset: 0;
   z-index: 0;
   background-image:
-    linear-gradient(180deg, rgba(10, 16, 8, 0.10) 0%, rgba(10, 14, 8, 0.04) 34%, rgba(8, 12, 6, 0.80) 80%),
+    linear-gradient(180deg, rgba(14, 32, 17, 0.10) 0%, rgba(14, 32, 17, 0.04) 34%, rgba(14, 32, 17, 0.55) 80%),
     url('/images/login-bg.jpg');
   /* Ivo's pick after seeing ten framings side by side: the house centred,
      with "bem-vinde" sitting over its wall.
@@ -550,12 +550,12 @@ body:has(#login:not(.hidden)) { background-color: #241d17; }
   #login { background-color: #10230f; }
   #login::before {
     background-image:
-      linear-gradient(180deg, rgba(10, 16, 8, 0.10) 0%, rgba(10, 14, 8, 0.04) 34%, rgba(8, 12, 6, 0.80) 80%),
+      linear-gradient(180deg, rgba(14, 32, 17, 0.10) 0%, rgba(14, 32, 17, 0.04) 34%, rgba(14, 32, 17, 0.55) 80%),
       url('/images/login-bg-wide.jpg');
     background-size: cover;
     background-position: center center;
   }
-  body:has(#login:not(.hidden)) { background-color: #0b180b; }
+  body:has(#login:not(.hidden)) { background-color: #10230f; }   /* APP-LG-001: moss like lodge.appdoivo.com, not near-black */
 }
 
 #login .cover {
