@@ -3412,3 +3412,8 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
    reserving its height: on short phones it pushed the keys off the bottom. An error, when shown,
    only moves what's below it. */
 #login:not(.hidden):has(#demo-keys:not(.hidden)) #login-error:empty { display: none; }
+/* APP-LG-001 round 2. The sign-in never scrolls, so it reserves no scrollbar strip: with "always show
+   scrollbars" on, the reserved gutter showed as a dark bar down the right side. */
+html:has(#login:not(.hidden)) { scrollbar-gutter: auto; overflow-y: hidden; }
+/* The demo keys read like every other button (entrar): the same size, weight and spacing, not bold. */
+.demo-keys-list .find-key-result { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.16em; text-transform: lowercase; }
