@@ -484,7 +484,7 @@ body:has(#login:not(.hidden)) { background-color: #241d17; }
   inset: 0;
   z-index: 0;
   background-image:
-    linear-gradient(180deg, rgba(10, 16, 8, 0.10) 0%, rgba(10, 14, 8, 0.04) 34%, rgba(8, 12, 6, 0.80) 80%),
+    linear-gradient(180deg, rgba(14, 32, 17, 0.10) 0%, rgba(14, 32, 17, 0.04) 34%, rgba(14, 32, 17, 0.55) 80%),
     url('/images/login-bg.jpg');
   /* Ivo's pick after seeing ten framings side by side: the house centred,
      with "bem-vinde" sitting over its wall.
@@ -550,12 +550,12 @@ body:has(#login:not(.hidden)) { background-color: #241d17; }
   #login { background-color: #10230f; }
   #login::before {
     background-image:
-      linear-gradient(180deg, rgba(10, 16, 8, 0.10) 0%, rgba(10, 14, 8, 0.04) 34%, rgba(8, 12, 6, 0.80) 80%),
+      linear-gradient(180deg, rgba(14, 32, 17, 0.10) 0%, rgba(14, 32, 17, 0.04) 34%, rgba(14, 32, 17, 0.55) 80%),
       url('/images/login-bg-wide.jpg');
     background-size: cover;
     background-position: center center;
   }
-  body:has(#login:not(.hidden)) { background-color: #0b180b; }
+  body:has(#login:not(.hidden)) { background-color: #10230f; }   /* APP-LG-001: moss like lodge.appdoivo.com, not near-black */
 }
 
 #login .cover {
@@ -3391,3 +3391,29 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
   /* words over the painting stay readable */
   #login:not(.hidden) .greeting, #login:not(.hidden) .login-meta, #login:not(.hidden) .demo-keys-help, #login:not(.hidden) #find-key-link { text-shadow: 0 1px 2px rgba(6, 12, 5, .95), 0 0 14px rgba(6, 12, 5, .8); }
 }
+
+/* Demo keys say only "a guest" / "an admin", so the buttons are one line and smaller (Ivo, 10 Nov),
+   and on wide screens the whole sign-in sits a little lower on the grass (APP-LG-002). */
+.demo-keys-list .find-key-result { min-height: 44px; padding: 8px 10px; display: grid; place-items: center; }
+@media (min-width: 700px) and (min-aspect-ratio: 1/1) {
+  /* the sign-in hangs from the bottom edge: less padding there lowers the whole stack, greeting included */
+  #login:not(.hidden) .cover { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+}
+
+/* The version badge is a full-width strip at the foot of the sign-in; it only shows a number, so taps go
+   through it - it was swallowing "find your key" once the sign-in moved lower (APP-LG-002). */
+.version-badge { pointer-events: none; }
+/* Looking up your key by name (APP-LG-002): nothing moves. Entrar, the error line and the demo keys keep
+   their space but step out of sight, and the results float right under the field, over that space. */
+#login.finding #login-submit-btn, #login.finding #login-error, #login.finding #demo-keys { visibility: hidden; }
+.password-field > #find-key-results { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-width: none; margin: 0; z-index: 5; max-height: 45vh; overflow-y: auto; }
+.password-field > #find-key-results .muted { margin: 0; padding: 10px 14px; border-radius: 10px; background: rgba(20, 16, 12, .88); color: var(--ink); }
+/* With the demo keys on screen (and "find your key" now above them), the empty error line stops
+   reserving its height: on short phones it pushed the keys off the bottom. An error, when shown,
+   only moves what's below it. */
+#login:not(.hidden):has(#demo-keys:not(.hidden)) #login-error:empty { display: none; }
+/* APP-LG-001 round 2. The sign-in never scrolls, so it reserves no scrollbar strip: with "always show
+   scrollbars" on, the reserved gutter showed as a dark bar down the right side. */
+html:has(#login:not(.hidden)) { scrollbar-gutter: auto; overflow-y: hidden; }
+/* The demo keys read like every other button (entrar): the same size, weight and spacing, not bold. */
+.demo-keys-list .find-key-result { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.16em; text-transform: lowercase; }
