@@ -190,17 +190,11 @@ scanner will keep flagging the domain as unconfigured however correct the file
 in here is. Edit it via the zone's `security-center/securitytxt` API, or under
 Security -> Settings in the dashboard.
 
-It names `mail@appdoivo.com` (one address per domain, all routed to the same Gmail; it used to be `security@appdoivo.com`, retired
-with the app), which is a Cloudflare Email Routing address, not a real
-mailbox. Two things about that:
-
-- **Failure is silent.** DNS being right (MX, SPF, the DMARC `rua`) is not
-  enough; if the routing destination has never been verified, mail is accepted
-  and dropped, with no bounce to tell you. This is exactly what happened when
-  it was first set up.
-- **It cannot be checked remotely.** Cloudflare's MX rejects senders without
-  reverse DNS, so an SMTP probe never gets far enough to ask. The only real
-  test is to send the address an email and see whether it arrives.
+It names `mail@appdoivo.com`, the one address on the domain (it used to be
+`security@appdoivo.com`, retired with the app). Since November 2026 it is an
+iCloud+ custom-domain mailbox (MX `mx01/mx02.mail.icloud.com`, DKIM `sig1`
+via iCloud); the old Cloudflare Email Routing to Gmail is gone. The only real
+test is still to send the address an email and see whether it arrives.
 
 The same address receives DMARC aggregate reports, so if it breaks, those are
 lost too - not just vulnerability reports.
