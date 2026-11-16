@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Runs the test suite, then deploys to the given target - refuses to touch
-# lodge-qa.appdoivo.com or lodge.appdoivo.com if a test fails.
-# See CONTRIBUTING.md for the full branch -> QA -> prod process this fits into.
+# lodge.appdoivo.com or the demo if a test fails.
+# See CONTRIBUTING.md for the full branch -> prod process this fits into.
+# (The QA copy, lodge-qa, was removed on 2026-11-16: APP-LG-003.)
 #
 # Auth: one token per environment, picked by target, so the credential that
-# deploys QA cannot reach production at all. That is the whole point of
+# deploys the demo cannot reach production at all. That is the whole point of
 # splitting them - a single account-wide token means any accident or leak
 # reaches everything. FLY_API_TOKEN is still honoured as a fallback for
 # anywhere that sets one directly (CI, a one-off shell), so nothing that
@@ -12,8 +13,8 @@
 set -euo pipefail
 
 target="${1:-}"
-if [[ "$target" != "qa" && "$target" != "prod" && "$target" != "demo" ]]; then
-  echo "Usage: scripts/deploy.sh <qa|prod|demo>" >&2
+if [[ "$target" != "prod" && "$target" != "demo" ]]; then
+  echo "Usage: scripts/deploy.sh <prod|demo>" >&2
   exit 1
 fi
 
@@ -35,9 +36,7 @@ read_env() {
   printf '%s' "$value"
 }
 
-if [[ "$target" == "qa" ]]; then
-  token="${FLY_API_TOKEN_QA:-$(read_env FLY_API_TOKEN_QA)}"
-elif [[ "$target" == "demo" ]]; then
+if [[ "$target" == "demo" ]]; then
   token="${FLY_API_TOKEN_DEMO:-$(read_env FLY_API_TOKEN_DEMO)}"
 else
   token="${FLY_API_TOKEN_PROD:-$(read_env FLY_API_TOKEN_PROD)}"
@@ -51,12 +50,10 @@ if [[ -z "$token" ]]; then
 fi
 export FLY_API_TOKEN="$token"
 
-# SKIP_TESTS=1 only for code that just passed (e.g. demo right after the same commit went to qa)
+# SKIP_TESTS=1 only for code that just passed (e.g. demo right after the same commit went to prod)
 if [[ "${SKIP_TESTS:-}" == "1" ]]; then echo "Skipping tests (SKIP_TESTS=1)."; else echo "Running tests before deploy..."; npm test; fi
 
-if [[ "$target" == "qa" ]]; then
-  fly deploy -a lodge-qa --config fly.qa.toml
-elif [[ "$target" == "demo" ]]; then
+if [[ "$target" == "demo" ]]; then
   fly deploy -a lodge-demo --config fly.demo.toml
 else
   fly deploy -a appdoivo
