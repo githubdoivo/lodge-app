@@ -13,14 +13,6 @@ Never commit straight to `main`.
 
 ## Environments
 
-- **QA** (`lodge-qa`, https://lodge-qa.appdoivo.com) - manual preview target.
-  Stops when idle (`min_machines_running = 0`), so it costs next to nothing
-  between tests. The first visit after a pause takes a few seconds, and
-  the database starts fresh (seeded) each time it wakes, like after a deploy.
-  No persistent volume: the database is ephemeral and resets on every deploy.
-  Same admin login as production, but its own `TOKEN_SECRET`/VAPID keys.
-  Deployed manually, on demand, from whatever branch is being tested - never
-  automatically. Use throwaway test users here, not real ones.
 - **Production** (`appdoivo`, https://lodge.appdoivo.com) - the real app, real data,
   persistent volume. Only ever deployed from `main`. Suspended between parties.
 - **Demo** (`lodge-demo`, https://lodge-demo.appdoivo.com) - public, for
@@ -28,8 +20,9 @@ Never commit straight to `main`.
   `src/demo.js`), no volume, stops when idle. Deployed from `main` with
   `scripts/deploy.sh demo`, using `FLY_API_TOKEN_DEMO` from `.env`.
 
-Databases are intentionally isolated between all three - QA is for testing
-behaviour safely, not for managing real users.
+Databases are intentionally isolated between the two. There is no QA copy any
+more (removed 2026-11-16, APP-LG-003): changes are tested by `npm test`, then
+go to production and the demo.
 
 ## Process for a change
 
@@ -56,19 +49,15 @@ session's work and deploy once at the end.
    there means the branch isn't safe to deploy or merge. Plain pushes
    without an open PR don't trigger CI, to avoid noise on WIP commits that
    aren't close to main yet.
-5. Deploy the branch straight to QA with `scripts/deploy.sh qa` (wraps
-   `npm test` + `fly deploy -a lodge-qa --config fly.qa.toml` - refuses
-   to deploy if tests fail) so it can be checked live at
-   https://lodge-qa.appdoivo.com before it's even merged. Bump the version in
-   `package.json` before each QA deploy, so the version badge makes it
-   obvious which build is live.
-6. Once it's confirmed working on QA, open a PR and merge it into `main`
+5. Open a PR and merge it into `main` once CI is green
    (delete the branch on merge - `gh pr merge --merge --delete-branch`).
-7. Only after merging: deploy `main` to production with
-   `scripts/deploy.sh prod`. Fly's GitHub integration is connected but has
+   There is no QA step any more (removed 2026-11-16, APP-LG-003).
+6. Only after merging: deploy `main` to production with
+   `scripts/deploy.sh prod`, then the demo with `SKIP_TESTS=1 scripts/deploy.sh demo`.
+   Fly's GitHub integration is connected but has
    not reliably auto-deployed on push in practice, so treat this script as
    the real deploy step, not the integration.
-8. Verify production directly (HTTP check, login, and whatever the batch
+7. Verify production directly (HTTP check, login, and whatever the batch
    actually touched) before considering the session's work done.
 
 ### The app is closed (23 September 2026)
@@ -203,9 +192,9 @@ lost too - not just vulnerability reports.
 
 Step the patch by **5** (`1.5.0`, `1.5.5`, ... `1.5.95`, then bump the
 minor). Briefly tried stepping by 1 and reverted - the gaps are the point,
-they make one build obviously different from the next at a glance in the
-badge, which is all the number is for. Prod and QA carry the same version
-for a given release: bump once, deploy both.
+they make one build obviously different from the next at a glance (the
+on-screen badge is gone since 2026-11-16; `GET /api/version` still answers).
+Prod and the demo carry the same version for a given release.
 
 **The number was wound back from `1.9.50` to `1.5.0` on 10 August 2026** -
 stepping by 5 was eating the minor far faster than the app was actually

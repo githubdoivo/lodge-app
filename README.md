@@ -107,13 +107,10 @@ API scenarios plus UI scenarios on iPhone and desktop, with a
 
 **Environments**
 
-- **QA** (`fly.qa.toml`): ephemeral database that resets on every deploy,
-  auto-seeded demo data (`SEED_DEMO`), and QA-only feature flags
-  (`ENABLE_ADMIN_PROMOTION`), so every role and flow can be tested from a
-  clean state.
 - **Production** (`fly.toml`): persistent volume, deployed only from `main`.
-- A version badge (`APP_ENV`) shows which environment is open, so QA and
-  production can't be confused on a phone.
+- **Demo** (`fly.demo.toml`): public, mock data only.
+- A QA copy and an on-screen version badge were removed on 2026-11-16
+  (APP-LG-003): until the next party, tested changes go straight to production.
 
 **Flaky test investigation**
 
@@ -225,13 +222,12 @@ device). Each notification opens the app straight to the relevant tab. See
 - `ENABLE_PLAZA` - turns on the Wall tab. Off by default locally; on in both QA and production.
 - `SEED_DEMO` - auto-loads demo data on boot. QA only, never production.
 - `DB_FILE` - (optional) database path; used by the tests (`:memory:` or a temp file).
-- `APP_ENV` - (optional) labels the version badge (e.g. `qa`) so it's obvious which environment is open.
 
 ## Deploy & hosting
 
 See [SETUP.md](SETUP.md) for the full hosting guide: readiness checklist,
 step-by-step Fly.io deploy, free hosting options for the app and database, and
-where to buy a domain. A `Dockerfile` and `fly.toml`/`fly.qa.toml` are included.
+where to buy a domain. A `Dockerfile` and `fly.toml` are included.
 
 The database lives in `data/app.sqlite`. On platforms with an ephemeral
 filesystem, attach a persistent volume mounted at the database path so votes and

@@ -128,11 +128,8 @@ const { version: appVersion } = JSON.parse(readFileSync(join(__dirname, '..', 'p
 
 /* ---------------------------------- Auth --------------------------------- */
 
-// App version shown as a small on-screen reference (see version.js), so QA
-// vs prod mismatches are obvious when reporting a bug. Public - no need to
-// be logged in to see it (the login screen shows it too). APP_ENV is only
-// ever set to "qa" (see fly.qa.toml) - prod leaves it unset, so the badge
-// only ever gets an env label on QA, never a redundant "prod" one.
+// The running version, for checking which build is live (the on-screen badge
+// and the QA copy were removed on 2026-11-16, APP-LG-003).
 router.get('/version', (req, res) => {
   res.json({ version: appVersion, env: process.env.APP_ENV || null });
 });

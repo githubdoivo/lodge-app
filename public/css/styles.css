@@ -312,29 +312,6 @@ html.mode-dark body:not([class*="theme-"]) {
   border: 0;
 }
 
-/* Tiny reference number, not a UI feature - lets QA vs prod be compared at
-   a glance when reporting a bug (see version.js / GET /api/version). Sits
-   as the last element in the DOM (after #login/#app, both of which toggle
-   via .hidden), so in normal document flow it always lands at the true
-   bottom of whichever page/section is currently showing - a fixed
-   floating badge used to sit on top of page content instead. */
-.version-badge {
-  display: block;
-  text-align: right;
-  padding: 20px 4px calc(10px + env(safe-area-inset-bottom));
-  font-size: var(--text-xs);
-  color: var(--ink-soft);
-  opacity: 0.4;
-  letter-spacing: 0.02em;
-  user-select: none;
-}
-
-/* On the login screen the badge sits on the painting's bottom edge instead of
-   below it: in the flow it added a strip of plain background under the
-   picture, which read as the end of a frame. */
-body:has(#login:not(.hidden)) { position: relative; }
-body:has(#login:not(.hidden)) .version-badge { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; }
-
 .muted { color: var(--ink-soft); font-size: 0.92rem; }
 /* Kill-switch confirmation ("apagado.") sits on its own line below the
    danger button, not crammed beside it like the other inline action msgs. */
@@ -606,7 +583,6 @@ body:has(#login:not(.hidden)) { height: 100%; overflow: hidden; }
 /* body must not be the login's frame: with overflow hidden it would clip the
    strip and the window could not be held down by it */
 body:has(#login:not(.hidden)) { position: static; }
-body:has(#login:not(.hidden)) .version-badge { bottom: calc(-1 * var(--above)); }
 #login:not(.hidden) .cover {
   height: 100%; min-height: 0;
   overflow-x: hidden; overflow-y: auto; overscroll-behavior: none;
@@ -3400,9 +3376,6 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
   #login:not(.hidden) .cover { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
 }
 
-/* The version badge is a full-width strip at the foot of the sign-in; it only shows a number, so taps go
-   through it - it was swallowing "find your key" once the sign-in moved lower (APP-LG-002). */
-.version-badge { pointer-events: none; }
 /* Looking up your key by name (APP-LG-002): nothing moves. Entrar, the error line and the demo keys keep
    their space but step out of sight, and the results float right under the field, over that space. */
 #login.finding #login-submit-btn, #login.finding #login-error, #login.finding #demo-keys { visibility: hidden; }

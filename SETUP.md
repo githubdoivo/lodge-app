@@ -95,7 +95,7 @@ The only requirement is a **persistent disk** for the SQLite database. If the ho
 
 `min_machines_running` is set to 1 in `fly.toml` so the Rata reveal (every 3 hours) fires even with no traffic. Outside events you may set it to 0 to save resources (the cron then only runs when there is a visit).
 
-QA (`lodge-qa`) is deployed the same way but with `scripts/deploy.sh qa` (or `fly deploy -a lodge-qa --config fly.qa.toml`) - see [CONTRIBUTING.md](CONTRIBUTING.md) for the full branch -> QA -> prod process.
+The demo (`lodge-demo`) is deployed with `scripts/deploy.sh demo` - see [CONTRIBUTING.md](CONTRIBUTING.md) for the full process.
 
 ## Free hosting recommendations (app + database), securely
 
@@ -107,7 +107,7 @@ QA (`lodge-qa`) is deployed the same way but with `scripts/deploy.sh qa` (or `fl
 Security checklist:
 
 - Always set secrets through the host's "secrets" mechanism, never in `fly.toml` or the repository.
-- Keep HTTPS enforced (already set in `fly.toml`/`fly.qa.toml`).
+- Keep HTTPS enforced (already set in `fly.toml`).
 - Keep `.env` in `.gitignore` (already done).
 - User tokens are stored encrypted in the database (HMAC index plus AES-256-GCM), so a database leak alone does not expose them - as long as `TOKEN_SECRET` stays out of the database.
 
@@ -143,7 +143,6 @@ Avoid GoDaddy (up-sells and expensive renewals). Suggested names: `appdoivo.com`
   calls the API, so it is not needed to run `npm test`.
 - `SEED_DEMO` - auto-loads demo users/contestants/consequences on every boot. QA only - never set in production.
 - `DB_FILE` - (optional) database path; used by the tests and to point production/QA at their mounted volume.
-- `APP_ENV` - (optional) labels the version badge (e.g. `qa`), so it's obvious at a glance which environment is open.
 
 ## Moving the project to another computer
 

@@ -4,7 +4,6 @@ import { applyMode, toggleMode, syncThemeColor } from './theme.js';
 import { registerServiceWorker, refreshNotifButton, wireNotifButton, wireDeepLinks, consumePendingDeepLink } from './push.js';
 import { wireLogoEasterEgg } from './logoEasterEgg.js';
 import { wirePasswordToggle } from './passwordToggle.js';
-import { wireVersionBadge } from './version.js';
 import { showAlert, showConfirm } from './modal.js';
 import { resizePhotoToJpeg } from './photo.js';
 import { formatEuDate, formatEuDateTime, formatTimeInZone } from './time.js';
@@ -114,7 +113,6 @@ async function boot() {
   applyMode();
   applyI18n();
   updateLangUI();
-  wireVersionBadge();
   // Not authenticated (no token, or one the server no longer accepts) -
   // land on the actual login page, same as the main app does on a failed
   // /me (see boot() in app.js). This used to just print an error message
