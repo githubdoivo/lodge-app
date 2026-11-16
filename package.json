@@ -1,6 +1,6 @@
 {
   "name": "lodge-app",
-  "version": "1.9.27",
+  "version": "1.10.0",
   "description": "Party web app with four features: wall, rata, snatch and plaza.",
   "type": "module",
   "main": "src/server.js",
@@ -13,7 +13,8 @@
     "test": "node scripts/run-tests.js",
     "test:ui": "node --disable-warning=ExperimentalWarning --test test/ui.test.js",
     "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true",
-    "screenshots": "node --disable-warning=ExperimentalWarning scripts/screenshots.js"
+    "screenshots": "node --disable-warning=ExperimentalWarning scripts/screenshots.js",
+    "reset-owner-faceid": "node --disable-warning=ExperimentalWarning scripts/reset-owner-faceid.js"
   },
   "engines": {
     "node": ">=23.4"
