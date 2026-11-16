@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.DB_FILE = join(tmpdir(), `appdoivo-demoseed-test-${process.pid}-${Date.now()}.sqlite`);
+// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
+process.env.ADMIN_PASSKEY = 'off';
 process.env.TOKEN_SECRET = 'irrelevant-for-this-test';
 const { generateDemoUserToken } = await import('../src/db.js');
 

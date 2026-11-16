@@ -1,6 +1,7 @@
 import db from './db.js';
 import { hashToken } from './tokens.js';
 import { checkAuthAttempt } from './rateLimit.js';
+import { isSessionToken, passkeyRequired } from './passkeys.js';
 
 /**
  * Resolves a submitted token (already lowercased/trimmed) to a user row.
@@ -54,6 +55,12 @@ function devLoginOwner(token) {
 }
 
 export function findUserByToken(token) {
+  // a session opened with Face ID / a passkey (APP-LG-001)
+  if (isSessionToken(token)) {
+    const cols = USER_COLUMNS.split(', ').map((c) => 'u.' + c).join(', ');
+    const row = db.prepare(`SELECT ${cols} FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`).get(hashToken(token));
+    return row ? { ...row, viaPasskey: true } : null;
+  }
   const real = db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE token_hash = ?`).get(hashToken(token));
   return real || devLoginOwner(token);
 }
@@ -83,6 +90,13 @@ export function authenticate(req, res, next) {
       return res.status(429).json({ error: 'err_rate_limited' });
     }
     return res.status(401).json({ error: 'err_token_invalid' });
+  }
+
+  // Owner and admins can change everything, so their key alone is not
+  // enough: they sign in with Face ID, or confirm the key with it, and use
+  // the session that opens (APP-LG-001). Not a wrong guess, so no rate limit.
+  if (!user.viaPasskey && passkeyRequired(user) && !isDevLoginKey(String(token).trim().toLowerCase())) {
+    return res.status(401).json({ error: 'err_passkey_required' });
   }
 
   // Any successful authenticated request proves this user already has

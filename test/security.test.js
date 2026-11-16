@@ -18,6 +18,8 @@ const DB = join(tmpdir(), `appdoivo-sec-${process.pid}-${Date.now()}.sqlite`);
 process.env.ANTHROPIC_API_KEY = '';                       // never reach the real API
 process.env.TOKEN_SECRET ||= 'test-secret-not-used-anywhere-real';
 process.env.DB_FILE = DB;
+// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
+process.env.ADMIN_PASSKEY = 'off';
 process.env.ADMIN_NAME = 'Sec Owner';
 process.env.ENABLE_ADMIN_PROMOTION = 'true';
 process.env.ENABLE_PLAZA = 'true';

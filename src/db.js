@@ -595,6 +595,34 @@ if (!columnExists('translations', 'source_hash')) {
   db.exec('ALTER TABLE translations ADD COLUMN source_hash TEXT');
 }
 
+// Face ID / passkeys (APP-LG-001). A passkey is a key pair kept by the phone;
+// only its public key is stored here. Signing in with one, or confirming a
+// key sign-in with one, opens a session: a random token the browser keeps
+// instead of the key, stored here only as a hash. Owner and admins must use
+// one (see auth.js); for guests it is optional.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS passkeys (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    jwk        TEXT NOT NULL,
+    alg        INTEGER NOT NULL,
+    counter    INTEGER NOT NULL DEFAULT 0,
+    name       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+    used_at    TEXT
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+  );
+  CREATE TABLE IF NOT EXISTS passkey_challenges (
+    challenge TEXT PRIMARY KEY,
+    user_id   INTEGER,
+    expires   INTEGER NOT NULL
+  );
+`);
+
 
 export function generateUserToken(name) {
   const base = tokenBase(name);

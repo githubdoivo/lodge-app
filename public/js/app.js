@@ -7,6 +7,7 @@ import { wirePasswordToggle } from './passwordToggle.js';
 import { showAlert, showConfirm } from './modal.js';
 import { formatHourInZone, formatEuDate } from './time.js';
 import { resizePhotoToJpeg } from './photo.js';
+import { passkeySupported, createPasskey, usePasskey } from './passkey.js';
 
 // An installed iOS PWA keeps its WKWebView alive in the background rather
 // than doing a real fresh load every time you reopen it - the OS restores
@@ -362,6 +363,7 @@ wirePasswordToggle('token-input', 'token-toggle');
       list.appendChild(btn);
     }
     $('demo-keys').classList.remove('hidden');
+    $('faceid-btn').classList.add('hidden');   // shared demo accounts: no Face ID (APP-LG-001)
   } catch {
     // No demo on this server - nothing to show.
   }
@@ -373,7 +375,23 @@ $('login-form').addEventListener('submit', async (e) => {
   const token = $('token-input').value.trim();
   $('login-error').textContent = '';
   try {
-    setToken(token);
+    // The key is checked on its own first, so guests cost one request as
+    // before. Owner and admins get err_passkey_required back: their key
+    // alone opens nothing, so Face ID confirms it and a session opens (APP-LG-001).
+    clearToken();
+    const probe = await fetch('/api/me', { headers: { Authorization: `Bearer ${token.toLowerCase()}` } });
+    const pj = probe.ok ? null : await probe.json().catch(() => ({}));
+    if (pj && pj.error === 'err_passkey_required') {
+      const step = await api('/auth/login', { method: 'POST', body: { token } });
+      if (step.step === 'passkey') {
+        if (step.mode === 'create') $('login-error').textContent = t('faceid_first_admin');
+        const credential = step.mode === 'create' ? await createPasskey(step.options) : await usePasskey(step.options);
+        const done = await api('/auth/passkey/finish', { method: 'POST', body: { token, mode: step.mode, credential } });
+        setToken(done.session);
+      } else setToken(token);
+    } else if (pj) {
+      throw new Error(t(pj.error || 'err_token_invalid'));
+    } else setToken(token);
     const me = await api('/me');
     // Naming the account before leaving the page is what lets iCloud
     // Keychain store a real username/key pair rather than a stray password
@@ -389,6 +407,23 @@ $('login-form').addEventListener('submit', async (e) => {
   } catch (err) {
     clearToken();
     $('login-error').textContent = err.message;
+  }
+});
+
+// Face ID sign-in (APP-LG-001): the phone picks the account, no key typed.
+if (passkeySupported()) $('faceid-btn').classList.remove('hidden');
+$('faceid-btn').addEventListener('click', async () => {
+  $('login-error').textContent = '';
+  try {
+    clearToken();
+    const options = await api('/auth/passkey/options', { method: 'POST' });
+    const credential = await usePasskey(options);
+    const done = await api('/auth/passkey/signin', { method: 'POST', body: { credential } });
+    setToken(done.session);
+    location.replace('/');
+  } catch (err) {
+    clearToken();
+    $('login-error').textContent = err?.name === 'NotAllowedError' ? '' : (err.message || t('err_passkey_failed'));
   }
 });
 

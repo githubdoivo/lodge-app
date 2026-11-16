@@ -6,6 +6,7 @@ import { ZipFile } from 'yazl';
 import multer from 'multer';
 import db from './db.js';
 import { authenticate, findUserByToken, isDevLoginKey, requireAdmin, requireOwner } from './auth.js';
+import { passkeyRequired, registrationOptions, savePasskey, signInOptions, verifySignIn, openSession, endSession, endSessions, isSessionToken } from './passkeys.js';
 import { loginRateLimit, checkAuthAttempt } from './rateLimit.js';
 import { generateUserToken, getSetting, setSetting } from './db.js';
 import { hashToken, encryptToken, decryptToken } from './tokens.js';
@@ -159,7 +160,42 @@ router.post('/auth/login', loginRateLimit, (req, res) => {
   if (!isDevLoginKey(token)) {
     db.prepare("UPDATE users SET key_claimed_at = COALESCE(key_claimed_at, strftime('%Y-%m-%d %H:%M:%f', 'now')) WHERE id = ?").run(user.id);
   }
+  // Owner and admins confirm with Face ID (APP-LG-001): the key alone opens
+  // nothing for them. With no passkey yet, they add one now, once.
+  if (!user.viaPasskey && passkeyRequired(user) && !isDevLoginKey(token)) {
+    const has = db.prepare('SELECT count(*) c FROM passkeys WHERE user_id = ?').get(user.id).c > 0;
+    return res.json({ step: 'passkey', mode: has ? 'get' : 'create', options: has ? signInOptions(req, user.id) : registrationOptions(req, user) });
+  }
   res.json({ id: user.id, name: user.name, isAdmin: !!user.is_admin });
+});
+
+// The second half of a key sign-in for the owner and admins: the key again,
+// plus Face ID. A new passkey can be added this way only while the account
+// has none - after that, only an existing passkey confirms.
+router.post('/auth/passkey/finish', loginRateLimit, async (req, res) => {
+  const token = str(req.body?.token).trim().toLowerCase();
+  const user = token && !isSessionToken(token) ? findUserByToken(token) : null;
+  if (!user) return res.status(401).json({ error: 'err_token_invalid' });
+  const has = db.prepare('SELECT count(*) c FROM passkeys WHERE user_id = ?').get(user.id).c > 0;
+  let ok = false;
+  if (req.body?.mode === 'create' && !has) {
+    try { savePasskey(req, user, req.body.credential || {}); ok = true; } catch { ok = false; }
+  } else {
+    ok = (await verifySignIn(req, req.body?.credential, user.id)) === user.id;
+  }
+  if (!ok) return res.status(401).json({ error: 'err_passkey_failed' });
+  res.json({ session: openSession(user.id), id: user.id, name: user.name, isAdmin: !!user.is_admin });
+});
+
+// Signing in with Face ID alone: the phone picks the account.
+router.post('/auth/passkey/options', (req, res) => {   // just a challenge, not a guess: no rate limit
+  res.json(signInOptions(req));
+});
+router.post('/auth/passkey/signin', loginRateLimit, async (req, res) => {
+  const userId = await verifySignIn(req, req.body?.credential);
+  const user = userId && db.prepare('SELECT id, name, is_admin FROM users WHERE id = ?').get(userId);
+  if (!user) return res.status(401).json({ error: 'err_passkey_failed' });
+  res.json({ session: openSession(user.id), id: user.id, name: user.name, isAdmin: !!user.is_admin });
 });
 
 // First-time key retrieval: lets someone who's never logged in find their
@@ -181,6 +217,34 @@ router.post('/auth/claim-key', loginRateLimit, (req, res) => {
 
 // Everything below requires authentication.
 router.use(authenticate);
+
+// Ends this session (a Face ID sign-in); a key has nothing to end.
+router.post('/auth/logout', (req, res) => {
+  const token = String((req.get('authorization') || '').replace(/^Bearer /, '')).trim().toLowerCase();
+  if (isSessionToken(token)) endSession(token);
+  res.json({ ok: true });
+});
+
+// My Face ID passkeys: list, add, remove (APP-LG-001).
+router.get('/me/passkeys', (req, res) => {
+  const list = db.prepare('SELECT id, name, created_at, used_at FROM passkeys WHERE user_id = ? ORDER BY created_at').all(req.user.id);
+  res.json({ passkeys: list, required: passkeyRequired(req.user), available: process.env.DEMO_MODE !== 'true' });
+});
+router.post('/me/passkeys/options', (req, res) => {
+  if (process.env.DEMO_MODE === 'true') return res.status(403).json({ error: 'err_passkey_failed' });   // shared demo accounts
+  res.json(registrationOptions(req, req.user));
+});
+router.post('/me/passkeys', (req, res) => {
+  if (process.env.DEMO_MODE === 'true') return res.status(403).json({ error: 'err_passkey_failed' });   // shared demo accounts
+  try { res.json({ ok: true, ...savePasskey(req, req.user, req.body || {}) }); }
+  catch { res.status(400).json({ error: 'err_passkey_failed' }); }
+});
+router.delete('/me/passkeys/:id', (req, res) => {
+  const n = db.prepare('SELECT count(*) c FROM passkeys WHERE user_id = ?').get(req.user.id).c;
+  if (n <= 1 && passkeyRequired(req.user)) return res.status(400).json({ error: 'err_last_passkey' });
+  db.prepare('DELETE FROM passkeys WHERE id = ? AND user_id = ?').run(String(req.params.id), req.user.id);
+  res.json({ ok: true });
+});
 
 router.get('/me', (req, res) => {
   // The account card used to show whatever was typed at login, straight out
@@ -834,6 +898,7 @@ router.post('/admin/users/:id/regenerate-token', (req, res) => {
   const token = generateUserToken(user.name);
   db.prepare("UPDATE users SET token_hash = ?, token_enc = ?, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), key_claimed_at = NULL WHERE id = ?")
     .run(hashToken(token), encryptToken(token), id);
+  endSessions(id);   // a new key signs them out everywhere, Face ID sessions included
   res.json({ ok: true, id, name: user.name, token });
 });
 
@@ -846,6 +911,16 @@ router.post('/me/logo-customized', (req, res) => {
   }
   db.prepare('UPDATE users SET logo_customized = ? WHERE id = ?').run(customized ? 1 : 0, req.user.id);
   res.json({ ok: true, logo_customized: customized });
+});
+
+// Lost phone (APP-LG-001): the owner clears someone's Face ID; they sign in
+// with their key and, if they are an admin, add a new one.
+router.delete('/admin/users/:id/passkeys', (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT id FROM users WHERE id = ?').get(id)) return res.status(404).json({ error: 'err_user_not_found' });
+  db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(id);
+  endSessions(id);
+  res.json({ ok: true });
 });
 
 router.delete('/admin/users/:id', (req, res) => {

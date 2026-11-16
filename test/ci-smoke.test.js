@@ -15,6 +15,8 @@ import { webkit } from 'playwright';
 
 process.env.TOKEN_SECRET ||= 'test-secret-not-used-anywhere-real';
 process.env.DB_FILE = join(tmpdir(), `appdoivo-smoke-${process.pid}.sqlite`);
+// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
+process.env.ADMIN_PASSKEY = 'off';
 
 const { default: app, seedResult } = await import('../src/app.js');
 

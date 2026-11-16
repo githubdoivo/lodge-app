@@ -32,6 +32,8 @@ export const ICONS = {
   // Ivo spotted - the weight has to match, not just the stroke width.
   key: svg('<circle cx="8.5" cy="12" r="3.9"/><path d="M12.4 12H20.5M18.2 12v3M15.3 12v2.4"/>'),
   // Tick - "approve".
+  // face id (APP-LG-001): a face inside scan corners
+  faceid: svg('<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 15.5c1.5 1.2 3.5 1.2 5 0"/>'),
   approve: svg('<path d="M4.5 12.5 9.5 17.5 19.5 6.5"/>'),
   // Arrow curling back on itself - "reset to a new one".
   reset: svg('<path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5"/>'),

@@ -11,6 +11,8 @@ import { rmSync } from 'node:fs';
 
 const DB = join(tmpdir(), `appdoivo-demo-test-${process.pid}-${Date.now()}.sqlite`);
 process.env.DB_FILE = DB;
+// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
+process.env.ADMIN_PASSKEY = 'off';
 process.env.TOKEN_SECRET = 'demo-test-secret';
 process.env.DEMO_MODE = 'true';
 process.env.ANTHROPIC_API_KEY = '';

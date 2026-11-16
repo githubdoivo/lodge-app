@@ -3390,3 +3390,10 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 html:has(#login:not(.hidden)) { scrollbar-gutter: auto; overflow-y: hidden; }
 /* The demo keys read like every other button (entrar): the same size, weight and spacing, not bold. */
 .demo-keys-list .find-key-result { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.16em; text-transform: lowercase; }
+
+/* Face ID (APP-LG-001) */
+.faceid-btn { -webkit-appearance: none; appearance: none; width: 100%; margin-top: 4px; background: rgba(16, 35, 15, 0.35); color: #efe6d6; border: 1.5px solid rgba(239, 230, 214, 0.8); text-shadow: 0 1px 8px rgba(4, 6, 2, 0.5); }
+/* sits on the login art, light text on a dark ground; the iOS stuck-:hover must not fill it (see .link-btn) */
+.faceid-btn:hover { background: rgba(16, 35, 15, 0.35); color: #efe6d6; }
+.faceid-list { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 8px; }
+.faceid-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }

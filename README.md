@@ -244,3 +244,10 @@ consequences survive each deploy.
 - Any CLI script that imports `src/db.js` must load `dotenv` first
   (`import 'dotenv/config';`), otherwise `TOKEN_SECRET` is undefined and the
   token data can be corrupted.
+
+## Face ID (APP-LG-001)
+
+- **Owner and admins** sign in with Face ID. The key alone opens nothing for them: the first sign-in with the key asks them to add Face ID on that phone, and after that the key must be confirmed with it (or they tap "sign in with face id" and skip the key).
+- **Guests** keep using their key. Face ID is optional, added from Settings.
+- **Lost phone:** the owner clears anyone's Face ID from Manage Users (the face icon), which also signs them out. If the owner loses theirs, run `npm run reset-owner-faceid` on the server (`fly ssh console`), then sign in with the owner key (`npm run admin-token`).
+- The public demo has no Face ID (shared accounts). Test suites other than `test/passkeys.test.js` set `ADMIN_PASSKEY=off`; production never sets it.

@@ -8,6 +8,7 @@ import { showAlert, showConfirm } from './modal.js';
 import { resizePhotoToJpeg } from './photo.js';
 import { formatEuDate, formatEuDateTime, formatTimeInZone } from './time.js';
 import { iconButton, LEAD_ICONS, ICONS } from './icons.js';
+import { passkeySupported, createPasskey } from './passkey.js';
 
 // See the matching comment in app.js - stops an installed iOS PWA from
 // restoring a stale scroll position when its backgrounded WKWebView is
@@ -72,7 +73,40 @@ let myKey = '';
 // in Manage Users below. The key comes from /me rather than from
 // localStorage: what's stored there is whatever was typed at login, which
 // for the owner on QA is the short dev word, not the account's real key.
+// Face ID (APP-LG-001): this account's passkeys, add this phone, remove one.
+// Owner and admins need at least one (the server refuses removing the last).
+async function renderFaceId() {
+  const list = $('faceid-list'); const msg = $('faceid-msg');
+  try {
+    const { passkeys, required, available } = await api('/me/passkeys');
+    $('faceid-card').classList.toggle('hidden', !available);
+    $('faceid-help').textContent = t(required ? 'faceid_help_admin' : 'faceid_help_guest');
+    list.innerHTML = '';
+    if (!passkeys.length) { const li = document.createElement('li'); li.className = 'muted'; li.textContent = t('faceid_none'); list.appendChild(li); }
+    for (const p of passkeys) {
+      const li = document.createElement('li');
+      const name = document.createElement('span'); name.textContent = `${p.name} · ${formatEuDate(p.created_at)}`;
+      const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'small'; rm.textContent = t('faceid_remove');
+      rm.addEventListener('click', async () => {
+        try { await api(`/me/passkeys/${encodeURIComponent(p.id)}`, { method: 'DELETE' }); renderFaceId(); }
+        catch (err) { msg.textContent = err.message; }
+      });
+      li.append(name, rm); list.appendChild(li);
+    }
+  } catch { /* the card stays as it was */ }
+  $('faceid-add').classList.toggle('hidden', !passkeySupported());
+}
+$('faceid-add').addEventListener('click', async () => {
+  const msg = $('faceid-msg'); msg.textContent = '';
+  try {
+    const options = await api('/me/passkeys/options', { method: 'POST' });
+    await api('/me/passkeys', { method: 'POST', body: await createPasskey(options) });
+    msg.textContent = t('faceid_added'); renderFaceId();
+  } catch (err) { msg.textContent = err?.name === 'NotAllowedError' || err?.name === 'InvalidStateError' ? '' : err.message; }
+});
+
 function renderAccountCard() {
+  renderFaceId();
   $('account-name').textContent = myName;
   $('account-role-badge').className = `badge ${isOwner ? 'role-owner' : isAdmin ? 'role-admin' : 'role-user'}`;
   $('account-role-badge').textContent = isOwner ? 'owner' : isAdmin ? 'admin' : 'user';
@@ -285,7 +319,9 @@ function updateLangUI() {
 $('theme-toggle').addEventListener('click', () => toggleMode());
 wireNotifButton('notif-btn');
 
-$('logout-btn').addEventListener('click', () => {
+$('logout-btn').addEventListener('click', async () => {
+  // a Face ID session ends on the server too, not just on this phone (APP-LG-001)
+  try { await api('/auth/logout', { method: 'POST' }); } catch { /* signing out anyway */ }
   clearToken();
   location.href = '/';
 });
@@ -672,6 +708,7 @@ function renderUsersList(users) {
                   `data-toggle-admin="${u.id}" data-next="${u.is_admin ? '0' : '1'}"`)
               : ''}
             ${iconButton('key', t('regen_key'), `data-regen-user="${u.id}"`)}
+            ${iconButton('faceid', t('faceid_reset'), `data-faceid-user="${u.id}"`)}
             ${u.is_owner ? '' : iconButton('remove', t('remove'), `data-del-user="${u.id}"`, 'danger')}
           </div>` : ''}
         </div>
@@ -760,6 +797,15 @@ function renderUsersList(users) {
       } catch (err) {
         await showAlert(err.message);
       }
+    });
+  });
+
+  // lost phone (APP-LG-001): clears their Face ID and signs them out; they come back with their key
+  $('users-list').querySelectorAll('[data-faceid-user]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!(await showConfirm(t('faceid_reset_confirm'), { danger: true }))) return;
+      try { await api(`/admin/users/${b.dataset.faceidUser}/passkeys`, { method: 'DELETE' }); loadUsers(); }
+      catch (err) { await showAlert(err.message); }
     });
   });
 

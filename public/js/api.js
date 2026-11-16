@@ -38,7 +38,7 @@ let sessionEnded = false;
 // ...except where a 401 is a normal answer rather than a dead session:
 // change-token rejects a wrong *current* key that way, and logging someone
 // out for mistyping it would be absurd.
-const KEEPS_SESSION_ON_401 = ['/me/change-token', '/auth/login', '/auth/claim-key'];
+const KEEPS_SESSION_ON_401 = ['/me/change-token', '/auth/login', '/auth/claim-key', '/auth/passkey'];
 
 // Every poller in app.js swallows its own failures - deliberately, because
 // one dropped request during a party on house wifi is not worth a message.
