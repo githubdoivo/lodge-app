@@ -21,8 +21,8 @@ export async function createPasskey(o) {
 }
 
 /** Signs the server's challenge with a passkey on this phone (Face ID). */
-export async function usePasskey(o) {
-  const cred = await navigator.credentials.get({ publicKey: {
+export async function usePasskey(o, mediation) {
+  const cred = await navigator.credentials.get({ ...(mediation ? { mediation } : {}), publicKey: {
     ...o, challenge: toBuf(o.challenge),
     ...(o.allowCredentials ? { allowCredentials: o.allowCredentials.map((c) => ({ ...c, id: toBuf(c.id) })) } : {}),
   } });

@@ -57,7 +57,7 @@
         <input id="login-username" type="text" autocomplete="username"
                class="autofill-anchor" readonly tabindex="-1" aria-hidden="true" />
         <div class="password-field">
-          <input id="token-input" type="password" data-i18n-ph="access_key" placeholder="Chave de acesso" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" required />
+          <input id="token-input" type="password" data-i18n-ph="access_key" placeholder="Chave de acesso" autocomplete="current-password webauthn" autocapitalize="off" autocorrect="off" spellcheck="false" required />
           <button type="button" id="token-toggle" class="password-toggle" title="Mostrar" aria-label="Mostrar">
             <svg class="icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
@@ -73,8 +73,6 @@
           <div id="find-key-results"></div>
         </div>
         <button type="submit" id="login-submit-btn" data-i18n="enter">Entrar</button>
-        <!-- APP-LG-001: shown only where the phone supports passkeys -->
-        <button type="button" id="faceid-btn" class="faceid-btn hidden" data-i18n="faceid_signin">entrar com face id</button>
       </form>
       <p id="login-error" class="error"></p>
       <!-- Right under the key field, above the demo keys (APP-LG-002): it's about that field. -->

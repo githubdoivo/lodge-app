@@ -3787,8 +3787,8 @@ test('logging in through the real form lands in the app, and hands the password 
 
   assert.equal(
     await page.getAttribute('#token-input', 'autocomplete'),
-    'current-password',
-    'the key is a password and has to say so, or the manager will not store it',
+    'current-password webauthn',
+    'the key is a password (plus webauthn so the phone suggests the passkey) and has to say so, or the manager will not store it',
   );
 
   // The reload wipes the field, and the only moment that matters is the one

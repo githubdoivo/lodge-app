@@ -413,8 +413,6 @@ wirePasswordToggle('token-input', 'token-toggle');
       });
       list.appendChild(btn);
     }
-    // The shared accounts can't use it: only once this visitor has their own Face ID admin.
-    if (!localStorage.getItem('demoFaceIdKey')) $('faceid-btn').classList.add('hidden');
     $('demo-keys').classList.remove('hidden');
   } catch {
     // No demo on this server - nothing to show.
@@ -462,22 +460,21 @@ $('login-form').addEventListener('submit', async (e) => {
   }
 });
 
-// Face ID sign-in (APP-LG-001): the phone picks the account, no key typed.
-if (passkeySupported()) $('faceid-btn').classList.remove('hidden');
-$('faceid-btn').addEventListener('click', async () => {
-  $('login-error').textContent = '';
+// Face ID sign-in (APP-LG-008): no button. The key field carries
+// autocomplete="... webauthn", so the phone suggests the passkey right above
+// the keyboard when the field is tapped; picking it signs in without a key.
+(async () => {
   try {
-    clearToken();
+    if (!passkeySupported() || !(await PublicKeyCredential.isConditionalMediationAvailable?.())) return;
     const options = await api('/auth/passkey/options', { method: 'POST' });
-    const credential = await usePasskey(options);
+    const credential = await usePasskey(options, 'conditional');
     const done = await api('/auth/passkey/signin', { method: 'POST', body: { credential } });
     setToken(done.session);
     location.replace('/');
   } catch (err) {
-    clearToken();
-    $('login-error').textContent = err?.name === 'NotAllowedError' ? '' : (err.message || t('err_passkey_failed'));
+    if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') $('login-error').textContent = err.message || t('err_passkey_failed');
   }
-});
+})();
 
 // First-time key retrieval: for someone who's never logged in, find their
 // own account by name (see GET /auth/unclaimed-users) and claim its key
