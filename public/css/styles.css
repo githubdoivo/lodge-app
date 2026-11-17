@@ -592,7 +592,7 @@ body:has(#login:not(.hidden)) { position: static; }
   padding-left: max(20px, calc((100% - 580px) / 2));
   padding-right: max(20px, calc((100% - 580px) / 2));
   padding-top: calc(var(--above) + 22px);
-  padding-bottom: calc(36px + env(safe-area-inset-bottom) + var(--below));
+  padding-bottom: calc(36px + env(safe-area-inset-bottom) + var(--below) + var(--keyboard, 0px));
   /* Bottom-anchored with an auto margin instead of flex-end: flex-end lets
      content that overflows the top become unreachable by scrolling */
   justify-content: flex-start;
@@ -3349,7 +3349,8 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 
 /* Demo keys right under the key field (Ivo, 6 Nov): small, side by side, part of the form's column */
 #login .cover > .demo-keys, #login .demo-keys { position: static !important; width: 100%; max-width: 320px; margin: 12px auto 0; }
-.demo-keys-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* one row however many keys (the face id tryout makes three), so none drops below the screen */
+.demo-keys-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
 .demo-keys-help { font-size: 0.82rem; margin: 0 0 6px; }
 @media (pointer: coarse) and (orientation: portrait) and (max-width: 600px) {
   #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover { padding-top: calc(var(--above) + 100lvh * .40); }

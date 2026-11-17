@@ -11,6 +11,7 @@
 import { randomBytes, createHash, webcrypto } from 'node:crypto';
 import db from './db.js';
 import { hashToken } from './tokens.js';
+import { isFaceIdTryout } from './demo.js';
 
 const { subtle } = webcrypto;
 const CHALLENGE_MS = 5 * 60 * 1000;
@@ -19,8 +20,10 @@ export const b64u = (buf) => Buffer.from(buf).toString('base64url');
 export const unb64u = (s) => new Uint8Array(Buffer.from(String(s || ''), 'base64url'));
 
 /** Owners and admins must use a passkey; the public demo and older test suites switch it off. */
+// On the demo, only a visitor's own Face ID tryout admin needs one (src/demo.js).
 export function passkeyRequired(user) {
-  if (process.env.DEMO_MODE === 'true' || process.env.ADMIN_PASSKEY === 'off') return false;
+  if (process.env.DEMO_MODE === 'true') return !!user && isFaceIdTryout(user.id);
+  if (process.env.ADMIN_PASSKEY === 'off') return false;
   return !!(user && (user.is_admin || user.is_owner || user.isAdmin || user.isOwner));
 }
 

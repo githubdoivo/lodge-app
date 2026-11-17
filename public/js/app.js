@@ -130,6 +130,28 @@ function holdLoginStrip() {
 }
 ['scroll', 'resize', 'pageshow', 'load'].forEach((e) => window.addEventListener(e, holdLoginStrip, { passive: true }));
 
+// The keyboard (APP-LG-001, round 3): holding the window above also undoes
+// Safari's own scroll to the focused field, so the key field stayed behind the
+// keyboard. While it is open, .cover gets room for it at the bottom and
+// scrolls the field (and the enter button under it) up into the part of the
+// screen that is still visible.
+function keepLoginFieldVisible() {
+  const cover = document.querySelector('#login .cover');
+  if (!cover || $('login').classList.contains('hidden')) return;
+  const vv = window.visualViewport;
+  const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  const keyboard = Math.max(0, window.innerHeight - visibleBottom);
+  const field = document.activeElement;
+  const typing = field && cover.contains(field) && field.matches('input');
+  cover.style.setProperty('--keyboard', `${typing ? keyboard : 0}px`);
+  if (!typing) return;
+  const over = $('login-submit-btn').getBoundingClientRect().bottom + 12 - visibleBottom;
+  if (over > 0) cover.scrollTop += over;
+}
+document.addEventListener('focusin', () => setTimeout(keepLoginFieldVisible, 50));
+document.addEventListener('focusout', () => setTimeout(keepLoginFieldVisible, 50));
+window.visualViewport?.addEventListener('resize', keepLoginFieldVisible);
+
 
 function showApp(me) {
   $('login').classList.add('hidden');
@@ -362,8 +384,38 @@ wirePasswordToggle('token-input', 'token-toggle');
       });
       list.appendChild(btn);
     }
+    // The shared accounts have no Face ID; this one makes (or reuses) a private
+    // admin of your own that works like the real owner (APP-LG-001, round 3).
+    if (passkeySupported()) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'demo-faceid-btn';
+      btn.className = 'find-key-result';
+      btn.innerHTML = `<span data-i18n="demo_role_faceid">${esc(t('demo_role_faceid'))}</span>`;
+      btn.addEventListener('click', async () => {
+        $('login-error').textContent = '';
+        let key = localStorage.getItem('demoFaceIdKey');
+        try {
+          if (key) {   // the demo rebuilds its data on restart: that admin may be gone
+            const r = await fetch('/api/me', { headers: { Authorization: `Bearer ${key}` } });
+            const j = r.ok ? {} : await r.json().catch(() => ({}));
+            if (j.error === 'err_token_invalid') key = null;
+          }
+          if (!key) {
+            key = (await api('/demo/faceid-admin', { method: 'POST' })).key;
+            localStorage.setItem('demoFaceIdKey', key);
+          }
+          $('token-input').value = key;
+          $('login-form').requestSubmit();
+        } catch (err) {
+          $('login-error').textContent = err.message;
+        }
+      });
+      list.appendChild(btn);
+    }
+    // The shared accounts can't use it: only once this visitor has their own Face ID admin.
+    if (!localStorage.getItem('demoFaceIdKey')) $('faceid-btn').classList.add('hidden');
     $('demo-keys').classList.remove('hidden');
-    $('faceid-btn').classList.add('hidden');   // shared demo accounts: no Face ID (APP-LG-001)
   } catch {
     // No demo on this server - nothing to show.
   }

@@ -73,7 +73,7 @@ import {
 import { listMessages, postMessage, resetPseudonym, wallPseudonymDirectory } from './chat.js';
 import { seedDemo, seedGuestList, seedDemoConsequences, seedDemoContestants, seedDemoWall, seedDemoChat, seedDemoMemo } from './seedDemo.js';
 import { searchUnclaimedUsers, claimKey } from './keyClaim.js';
-import { demoGuard, demoKeys, DEMO_MODE, demoMemoFile } from './demo.js';
+import { demoGuard, demoKeys, DEMO_MODE, demoMemoFile, createFaceIdTryout, isFaceIdTryout } from './demo.js';
 import { myDedication, saveDedication, allDedications, wipeAll as wipeAllDedications } from './dedications.js';
 import { renderDedications, newDedicationsDocument } from './dedicationsPdf.js';
 import { queueAndRun, backfill as backfillTranslations } from './translate.js';
@@ -139,6 +139,13 @@ router.get('/version', (req, res) => {
 // else (see src/demo.js).
 router.get('/demo', (req, res) => {
   res.json({ keys: demoKeys() });
+});
+
+// Public demo only: a private admin of your own to try Face ID with (see src/demo.js).
+router.post('/demo/faceid-admin', loginRateLimit, (req, res) => {
+  const made = createFaceIdTryout(db, { hashToken, encryptToken, generateUserToken });
+  if (!made) return res.status(403).json({ error: 'err_demo_disabled' });
+  res.status(201).json(made);
 });
 
 // Validates a token and returns the user.
@@ -228,14 +235,14 @@ router.post('/auth/logout', (req, res) => {
 // My Face ID passkeys: list, add, remove (APP-LG-001).
 router.get('/me/passkeys', (req, res) => {
   const list = db.prepare('SELECT id, name, created_at, used_at FROM passkeys WHERE user_id = ? ORDER BY created_at').all(req.user.id);
-  res.json({ passkeys: list, required: passkeyRequired(req.user), available: process.env.DEMO_MODE !== 'true' });
+  res.json({ passkeys: list, required: passkeyRequired(req.user), available: process.env.DEMO_MODE !== 'true' || isFaceIdTryout(req.user.id) });
 });
 router.post('/me/passkeys/options', (req, res) => {
-  if (process.env.DEMO_MODE === 'true') return res.status(403).json({ error: 'err_passkey_failed' });   // shared demo accounts
+  if (process.env.DEMO_MODE === 'true' && !isFaceIdTryout(req.user.id)) return res.status(403).json({ error: 'err_passkey_failed' });   // shared demo accounts
   res.json(registrationOptions(req, req.user));
 });
 router.post('/me/passkeys', (req, res) => {
-  if (process.env.DEMO_MODE === 'true') return res.status(403).json({ error: 'err_passkey_failed' });   // shared demo accounts
+  if (process.env.DEMO_MODE === 'true' && !isFaceIdTryout(req.user.id)) return res.status(403).json({ error: 'err_passkey_failed' });   // shared demo accounts
   try { res.json({ ok: true, ...savePasskey(req, req.user, req.body || {}) }); }
   catch { res.status(400).json({ error: 'err_passkey_failed' }); }
 });

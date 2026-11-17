@@ -74,6 +74,28 @@ test('nobody can lock the next visitor out of the shared keys', async () => {
   assert.equal((await api('POST', '/auth/login', { body: { token: keys.guest } })).status, 200, 'the shared key still works');
 });
 
+test('a visitor can try Face ID on a private admin of their own; the shared keys stay free of it', async () => {
+  const keys = await demoKeys();
+  const a = await api('POST', '/demo/faceid-admin');
+  const b = await api('POST', '/demo/faceid-admin');
+  assert.equal(a.status, 201);
+  assert.notEqual(a.data.key, b.data.key, 'each visitor gets their own account');
+  // Like the real owner and admins: the key alone opens nothing, Face ID is asked for.
+  const me = await api('GET', '/me', { token: a.data.key });
+  assert.equal(me.status, 401);
+  assert.equal(me.data.error, 'err_passkey_required');
+  const step = await api('POST', '/auth/login', { body: { token: a.data.key } });
+  assert.equal(step.data.step, 'passkey');
+  assert.equal(step.data.mode, 'create');
+  // A wrong Face ID answer opens nothing.
+  const bad = await api('POST', '/auth/passkey/finish', { body: { token: a.data.key, mode: 'create', credential: {} } });
+  assert.equal(bad.status, 401);
+  // The shared admin and guest keys still sign straight in, with no Face ID asked.
+  assert.equal((await api('GET', '/me', { token: keys.admin })).status, 200);
+  assert.equal((await api('GET', '/me', { token: keys.guest })).status, 200);
+  assert.equal((await api('POST', '/me/passkeys/options', { token: keys.admin })).status, 403, 'shared admin cannot add Face ID');
+});
+
 test('what a stranger could abuse, or what wipes the demo for everyone, is refused', async () => {
   const { guest, admin } = await demoKeys();
   const refused = [
@@ -148,10 +170,12 @@ test('the shared keys are on screen and one tap logs in, on a phone and a deskto
       const page = await browser.newPage(device);
       await page.goto(base.replace(/\/api$/, '/'), { waitUntil: 'networkidle' });
       const keys = page.locator('#demo-keys-list button');
-      assert.equal(await keys.count(), 2);
+      assert.equal(await page.locator('#demo-keys-list button:not(#demo-faceid-btn)').count(), 2);
+      // the Face ID tryout shows where the browser has passkeys (WebKit does), and must fit too
+      assert.equal(await page.locator('#demo-faceid-btn').count(), await page.evaluate(() => (window.PublicKeyCredential ? 1 : 0)));
       for (const k of await keys.all()) {
-        const onScreen = await k.evaluate((e) => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.height > 0; });
-        assert.ok(onScreen, `${JSON.stringify(device.viewport)}: demo key off screen`);
+        const box = await k.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: r.height, screen: innerHeight }; });
+        assert.ok(box.top >= 0 && box.bottom <= box.screen && box.h > 0, `${JSON.stringify(device.viewport)}: demo key off screen ${JSON.stringify(box)}`);
       }
       await keys.first().click({ timeout: 5000 });
       await page.locator('#app:not(.hidden)').waitFor({ timeout: 5000 });

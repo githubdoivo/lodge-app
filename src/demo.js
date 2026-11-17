@@ -42,6 +42,27 @@ export function demoKeys() {
   ];
 }
 
+// Trying Face ID on the demo (APP-LG-001, round 3): the shared admin can't
+// hold a passkey (the first visitor to add one would lock everyone else out),
+// so each visitor who asks gets their own private admin, which behaves like
+// the real owner and admins: the key alone opens nothing, Face ID confirms.
+// Kept in memory: the demo database is rebuilt on every restart anyway.
+const faceIdTryouts = new Set();
+const MAX_TRYOUTS = 200;
+export const isFaceIdTryout = (userId) => DEMO_MODE && faceIdTryouts.has(Number(userId));
+
+/** Demo only: a fresh private admin to try Face ID with, or null once the demo has made enough. */
+export function createFaceIdTryout(db, { hashToken, encryptToken, generateUserToken }) {
+  if (!DEMO_MODE || faceIdTryouts.size >= MAX_TRYOUTS) return null;
+  const name = `face id ${faceIdTryouts.size + 1}`;
+  const key = generateUserToken(name);
+  const info = db.prepare(
+    "INSERT INTO users (name, token_hash, token_enc, is_admin, key_claimed_at, updated_at) VALUES (?, ?, ?, 1, strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))"
+  ).run(name, hashToken(key), encryptToken(key));
+  faceIdTryouts.add(Number(info.lastInsertRowid));
+  return { name, key };
+}
+
 const REFUSED = [
   ['POST', /^\/me\/change-token$/],
   ['POST', /^\/chat\/messages$/],
