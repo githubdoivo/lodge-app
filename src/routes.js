@@ -115,6 +115,8 @@ import {
   wipeAll as wipeAllMemo,
   dayHasPhotos,
   countDayPhotos,
+  listDayPhotoIds,
+  MEMO_RECAP_SECONDS_PER_PHOTO,
   setUploadFlipped,
 } from './memo.js';
 
@@ -1787,6 +1789,38 @@ router.post('/admin/memo/:day/recap', (req, res) => {
       fileSize: req.file.size,
     });
     res.status(201).json({ ok: true });
+  });
+});
+
+// The day video is made on the admin's phone now (canvas + MediaRecorder,
+// see buildDayVideoInBrowser() in settings.js): free, and nothing for the
+// server to encode, which is what a Cloudflare Worker needs (APP-LG-007).
+// These two routes are all the server does: hand over the photo list, then
+// store and publish the finished video.
+router.get('/admin/memo/:day/recap/photos', (req, res) => {
+  if (process.env.ENABLE_MEMO !== 'true') return res.status(404).json({ error: 'err_not_found' });
+  const ids = listDayPhotoIds(req.params.day);
+  if (ids.length === 0) return res.status(400).json({ error: 'err_memo_no_photos' });
+  res.json({ ids, secondsPerPhoto: MEMO_RECAP_SECONDS_PER_PHOTO });
+});
+
+router.post('/admin/memo/:day/recap/publish', (req, res) => {
+  if (process.env.ENABLE_MEMO !== 'true') return res.status(404).json({ error: 'err_not_found' });
+  const day = req.params.day;
+  if (!dayHasPhotos(day)) return res.status(400).json({ error: 'err_memo_no_photos' });
+  memoRecapUpload.single('file')(req, res, (err) => {
+    if (err) {
+      const code = err.code === 'LIMIT_FILE_SIZE' ? 'err_memo_file_too_large' : 'err_memo_upload_failed';
+      return res.status(400).json({ error: code });
+    }
+    if (!req.file) return res.status(400).json({ error: 'err_memo_invalid_type' });
+    saveRecap(day, req.user.id, {
+      mimeType: req.file.mimetype,
+      filePath: relative(MEMO_DIR, req.file.path),
+      fileSize: req.file.size,
+    });
+    createVideoPost(req.user.id, day);
+    res.status(201).json({ ok: true, photoCount: countDayPhotos(day) });
   });
 });
 

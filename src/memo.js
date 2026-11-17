@@ -503,6 +503,15 @@ export function countDayPhotos(day) {
   ).get(day).n;
 }
 
+/** The day's photo ids in the order they were taken: what the admin's phone
+ * fetches to build the day video itself (no ffmpeg on the server, which is
+ * what lets Lodge run on Cloudflare Workers - APP-LG-007). */
+export function listDayPhotoIds(day) {
+  return db.prepare(
+    "SELECT id FROM memo_uploads WHERE day = ? AND kind = 'photo' ORDER BY uploaded_at"
+  ).all(day).map((r) => r.id);
+}
+
 export function dayHasPhotos(day) {
   return !!db.prepare(
     "SELECT 1 FROM memo_uploads WHERE day = ? AND kind = 'photo' LIMIT 1"

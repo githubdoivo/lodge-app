@@ -3714,6 +3714,60 @@ test('stitching the day video answers immediately and reports when it is done', 
   for (const shooter of shooters) await api('DELETE', `/admin/users/${shooter.id}`, { token: ADMIN });
 });
 
+test('the day video made on the admin phone is listed, published and refused when wrong', async () => {
+  // APP-LG-007: the phone builds the video from the photo list and uploads
+  // it, so the server never runs ffmpeg (needed for Cloudflare Workers).
+  const day = today();
+  const shooter = (await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Phone Video Shooter' } })).data;
+  const slots = (await api('GET', '/memo/today', { token: shooter.token })).data.slots;
+  const slot = slots.find((sl) => sl.status === 'waiting') ?? slots[0];
+  markSlotNotified(slot.id);
+  const up = await apiUpload(`/memo/slots/${slot.id}/upload`, {
+    token: shooter.token, buffer: REAL_JPEG, filename: 'shot.jpg', mimeType: 'image/jpeg',
+  });
+  assert.equal(up.status, 201);
+
+  // Happy path: the list has the photo, in order, and a hold time.
+  const list = await api('GET', `/admin/memo/${day}/recap/photos`, { token: ADMIN });
+  assert.equal(list.status, 200);
+  assert.ok(list.data.ids.includes(up.data.id));
+  assert.equal(list.data.secondsPerPhoto, 1);
+
+  // Guests can't read the list or publish.
+  assert.equal((await api('GET', `/admin/memo/${day}/recap/photos`, { token: shooter.token })).status, 403);
+  const guestPub = await apiUpload(`/admin/memo/${day}/recap/publish`, {
+    token: shooter.token, buffer: Buffer.from('x'), filename: 'recap.mp4', mimeType: 'video/mp4',
+  });
+  assert.equal(guestPub.status, 403);
+
+  // Mistakes: a photo instead of a video, and a day with no photos.
+  const wrong = await apiUpload(`/admin/memo/${day}/recap/publish`, {
+    token: ADMIN, buffer: REAL_JPEG, filename: 'x.jpg', mimeType: 'image/jpeg',
+  });
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.data.error, 'err_memo_invalid_type');
+  assert.equal((await api('GET', '/admin/memo/1999-01-01/recap/photos', { token: ADMIN })).data.error, 'err_memo_no_photos');
+  const empty = await apiUpload('/admin/memo/1999-01-01/recap/publish', {
+    token: ADMIN, buffer: Buffer.from('x'), filename: 'recap.webm', mimeType: 'video/webm',
+  });
+  assert.equal(empty.data.error, 'err_memo_no_photos');
+
+  // Publishing twice (double tap) replaces the recap and stays fine.
+  for (let i = 0; i < 2; i++) {
+    const pub = await apiUpload(`/admin/memo/${day}/recap/publish`, {
+      token: ADMIN, buffer: Buffer.from('fake-mp4-bytes'), filename: 'recap.mp4', mimeType: 'video/mp4',
+    });
+    assert.equal(pub.status, 201);
+    assert.ok(pub.data.photoCount >= 1);
+  }
+  const state = (await api('GET', `/admin/memo/${day}/recap/status`, { token: ADMIN })).data.status;
+  assert.equal(state, 'done');
+  const posts = (await api('GET', '/plaza-posts', { token: ADMIN })).data.posts;
+  assert.ok(posts.some((p) => p.type === 'video'), 'the phone-made video lands on the Wall');
+
+  await api('DELETE', `/admin/users/${shooter.id}`, { token: ADMIN });
+});
+
 test('the published day video is compressed, not handed over at ffmpeg defaults', async () => {
   // Ivo, after a night with real people: the video that goes on the Wall has
   // to be compressed "to not jam the FE". His worry was the volume filling

@@ -2378,33 +2378,101 @@ async function downloadMemoFile(url, filename, msg, doneKey) {
   }
 }
 
-// Polls until the video exists or the encode gives up. Every 4s rather than
-// every second: the answer changes on the scale of minutes, and the machine
-// doing the asking is the same one doing the encoding.
-async function waitForRecap(day, msg) {
-  const STEP_MS = 4000;
-  const GIVE_UP_AFTER_MS = 20 * 60 * 1000;
-  const started = Date.now();
-  for (;;) {
-    await new Promise((r) => setTimeout(r, STEP_MS));
-    let state;
-    try {
-      state = await api(`/admin/memo/${encodeURIComponent(day)}/recap/status`);
-    } catch {
-      // A dropped poll is not a failed encode - the work carries on
-      // server-side, so keep asking.
-      continue;
+// The day video is made right here on the admin's phone (APP-LG-007): each
+// photo is drawn on a 720x1280 canvas, letterboxed, held for one second,
+// and the canvas is recorded with MediaRecorder. Safari records mp4, other
+// browsers webm; both play inline on the Wall. Free, and nothing for the
+// server to encode, which is what lets Lodge run on Cloudflare Workers.
+const RECAP_W = 720;
+const RECAP_H = 1280;
+
+function pickRecorderType() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const types = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  return types.find((type) => MediaRecorder.isTypeSupported(type)) || null;
+}
+
+async function loadPhoto(id) {
+  const res = await fetch(`/api/memo/uploads/${id}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+  if (!res.ok) throw new Error(`photo ${id}`);
+  const bitmap = await createImageBitmap(await res.blob(), { imageOrientation: 'from-image' });
+  return bitmap;
+}
+
+function drawLetterboxed(ctx, bitmap) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, RECAP_W, RECAP_H);
+  const scale = Math.min(RECAP_W / bitmap.width, RECAP_H / bitmap.height);
+  const w = bitmap.width * scale;
+  const h = bitmap.height * scale;
+  ctx.drawImage(bitmap, (RECAP_W - w) / 2, (RECAP_H - h) / 2, w, h);
+}
+
+async function buildDayVideoInBrowser(day, msg) {
+  const type = pickRecorderType();
+  if (!type || !HTMLCanvasElement.prototype.captureStream) throw new Error(t('err_memo_recap_browser'));
+  const { ids, secondsPerPhoto } = await api(`/admin/memo/${encodeURIComponent(day)}/recap/photos`);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = RECAP_W;
+  canvas.height = RECAP_H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, RECAP_W, RECAP_H);
+
+  // Fetch the next photo while the current one is on screen, so the video
+  // is never waiting on the network mid-recording. A photo that can't be
+  // read is skipped rather than failing the whole day.
+  const next = (i) => (i < ids.length ? loadPhoto(ids[i]).catch(() => null) : Promise.resolve(null));
+  let pending = next(0);
+  let first = await pending;
+  let index = 0;
+  while (!first && index < ids.length - 1) { index += 1; first = await next(index); }
+  if (!first) throw new Error(t('err_memo_recap_unreadable'));
+
+  const stream = canvas.captureStream(12);
+  const recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 2_000_000 });
+  const chunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+
+  drawLetterboxed(ctx, first);
+  first.close?.();
+  recorder.start(1000);
+  let shown = 1;
+  for (let i = index + 1; i <= ids.length; i += 1) {
+    pending = next(i);
+    // Repaint a few times a second so the recorder keeps getting frames.
+    const holdUntil = Date.now() + secondsPerPhoto * 1000;
+    while (Date.now() < holdUntil) {
+      ctx.drawImage(canvas, 0, 0);
+      await new Promise((r) => setTimeout(r, 250));
     }
-    if (state.status === 'done') return { ok: true, photoCount: state.photoCount };
-    if (state.status === 'failed') return { ok: false, error: t(state.error) || state.error };
-    if (state.status === 'idle') return { ok: false, error: t('err_memo_recap_failed') };
-    if (Date.now() - started > GIVE_UP_AFTER_MS) {
-      // The encode may well still finish; this only stops watching, which is
-      // why the wording says so rather than claiming it broke.
-      return { ok: false, error: t('memo_admin_still_running') };
-    }
-    if (msg) msg.textContent = t('memo_admin_publishing');
+    const bitmap = await pending;
+    if (i === ids.length) break;
+    if (!bitmap) continue;
+    drawLetterboxed(ctx, bitmap);
+    bitmap.close?.();
+    shown += 1;
+    if (msg) msg.textContent = t('memo_admin_making', { n: shown, total: ids.length });
   }
+  recorder.stop();
+  await stopped;
+  stream.getTracks().forEach((track) => track.stop());
+  return new Blob(chunks, { type: type.split(';')[0] });
+}
+
+async function publishDayVideo(day, blob) {
+  const form = new FormData();
+  form.append('file', blob, `recap.${blob.type === 'video/mp4' ? 'mp4' : 'webm'}`);
+  const res = await fetch(`/api/admin/memo/${encodeURIComponent(day)}/recap/publish`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ? t(data.error) : `Error ${res.status}`);
+  return data;
 }
 
 $('memo-days-list').addEventListener('click', async (e) => {
@@ -2443,13 +2511,12 @@ $('memo-days-list').addEventListener('click', async (e) => {
     msg.textContent = t('memo_admin_publishing');
     pubBtn.disabled = true;
     try {
-      // The server starts the encode and answers straight away - it is
-      // minutes of work and used to sit inside this request until the proxy
-      // cut it at 100 seconds, which reached the admin as a plain error.
-      // So this now waits by asking, rather than by holding a connection
-      // open and hoping.
-      await api(`/admin/memo/${encodeURIComponent(day)}/recap/generate`, { method: 'POST' });
-      const finished = await waitForRecap(day, msg);
+      // Made on this phone, then uploaded (APP-LG-007). Keep the screen on:
+      // the video records in real time, one second per photo.
+      const blob = await buildDayVideoInBrowser(day, msg);
+      msg.textContent = t('memo_admin_publishing');
+      const done = await publishDayVideo(day, blob);
+      const finished = { ok: true, photoCount: done.photoCount };
       // Reload first, then write the message: the reload rebuilds every row
       // (that's what makes the download-video button appear), so setting the
       // text before it would just be thrown away with the old element.
