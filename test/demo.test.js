@@ -170,9 +170,8 @@ test('the shared keys are on screen and one tap logs in, on a phone and a deskto
       const page = await browser.newPage(device);
       await page.goto(base.replace(/\/api$/, '/'), { waitUntil: 'networkidle' });
       const keys = page.locator('#demo-keys-list button');
-      assert.equal(await page.locator('#demo-keys-list button:not(#demo-faceid-btn)').count(), 2);
-      // the Face ID tryout shows where the browser has passkeys (WebKit does), and must fit too
-      assert.equal(await page.locator('#demo-faceid-btn').count(), await page.evaluate(() => (window.PublicKeyCredential && navigator.credentials ? 1 : 0)));   // passkeySupported()
+      assert.equal(await page.locator('#demo-keys-list button').count(), 2);
+      assert.equal(await page.locator('#demo-faceid-btn').count(), 0);   // no Face ID button (APP-LG-008)
       for (const k of await keys.all()) {
         const box = await k.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: r.height, screen: innerHeight }; });
         assert.ok(box.top >= 0 && box.bottom <= box.screen && box.h > 0, `${JSON.stringify(device.viewport)}: demo key off screen ${JSON.stringify(box)}`);
