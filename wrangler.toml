@@ -25,3 +25,8 @@ bucket_name = "lodge-demo-files"
 jurisdiction = "eu"
 
 # Secret (never in this file): TOKEN_SECRET, the same HMAC secret the Node app uses.
+
+# Workers Logs: errors and console output, readable in the Cloudflare dashboard (APP-HB-013)
+[observability]
+enabled = true
+head_sampling_rate = 1
