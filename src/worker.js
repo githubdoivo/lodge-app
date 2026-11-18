@@ -4,7 +4,7 @@
 import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
-import { isNight, DEFAULT_NIGHT } from './nights.js';
+import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
 import { addMemoRoutes } from './workerMemo.js';
 import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
@@ -608,7 +608,76 @@ writes['PATCH /api/admin/users/:id/admin'] = async (ctx) => {
   return json({ ok: true, is_admin: isAdmin }); // the push to that person comes with the push card
 };
 
-const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login']);
+// ---- Key change, first-time key claim, wipes (APP-LG-017 slice 1) ----
+// Same rules as /me/change-token in src/routes.js (rate limiting comes later).
+writes['POST /api/me/change-token'] = async (ctx) => {
+  const { DB, TOKEN_SECRET } = ctx.env;
+  const current = String(ctx.body.currentToken ?? '').toLowerCase();
+  const next = String(ctx.body.newToken ?? '').trim().toLowerCase();
+  const row = await DB.prepare('SELECT token_hash FROM users WHERE id = ?').bind(ctx.user.id).first();
+  if (!row || (await hashToken(TOKEN_SECRET, current)) !== row.token_hash) return json({ error: 'err_current_key_wrong' }, 401);
+  if (!/^[a-z0-9]+$/.test(next)) return json({ error: 'err_key_invalid_chars' }, 400);
+  if (next.length < 7) return json({ error: 'err_key_too_short' }, 400);
+  const hash = await hashToken(TOKEN_SECRET, next);
+  if (await DB.prepare('SELECT id FROM users WHERE token_hash = ? AND id != ?').bind(hash, ctx.user.id).first()) {
+    return json({ error: 'err_key_taken' }, 409);
+  }
+  try {
+    await DB.prepare(`UPDATE users SET token_hash = ?, token_enc = ?, updated_at = ${now} WHERE id = ?`)
+      .bind(hash, await encryptToken(TOKEN_SECRET, next), ctx.user.id).run();
+  } catch (err) {
+    // token_hash is UNIQUE: two people picking the same key at once is "taken", not a 500.
+    if (String(err?.message || '').includes('UNIQUE')) return json({ error: 'err_key_taken' }, 409);
+    throw err;
+  }
+  return json({ ok: true });
+};
+
+// src/keyClaim.js: names who never got their key, 3+ letters, accents folded.
+const fold = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+routes['/api/auth/unclaimed-users'] = async (ctx) => {
+  const term = String(ctx.url.searchParams.get('name') || '').trim();
+  if (term.length < 3) return json({ users: [] });
+  const { results } = await ctx.env.DB.prepare('SELECT id, name FROM users WHERE key_claimed_at IS NULL').all();
+  const f = fold(term);
+  return json({ users: results.filter((u) => fold(u.name).includes(f)).sort((a, b) => a.name.localeCompare(b.name)) });
+};
+// One shot: the conditional UPDATE means two claims at once can't both win.
+writes['POST /api/auth/claim-key'] = async (ctx) => {
+  const id = Number(ctx.body.userId);
+  const user = await ctx.env.DB.prepare('SELECT id, name, token_enc, key_claimed_at FROM users WHERE id = ?').bind(id).first();
+  if (!user) return json({ error: 'err_user_not_found' }, 400);
+  const res = await ctx.env.DB.prepare(`UPDATE users SET key_claimed_at = ${now} WHERE id = ? AND key_claimed_at IS NULL`).bind(id).run();
+  if (user.key_claimed_at || !res.meta.changes) return json({ error: 'err_key_already_claimed' }, 400);
+  return json({ ok: true, name: user.name, token: await decryptToken(ctx.env.TOKEN_SECRET, user.token_enc) });
+};
+
+// Owner wipes. What people wrote goes with them (ON DELETE CASCADE on users).
+const wipeTranslations = (DB, kinds) => kinds.map((k) => DB.prepare('DELETE FROM translations WHERE entity_type = ?').bind(k));
+const setSettingStmt = (DB, key, value) => DB.prepare(
+  'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(key, String(value));
+const ownerWipe = (stmts) => async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  await ctx.env.DB.batch(stmts(ctx.env.DB));
+  return json({ ok: true });
+};
+writes['POST /api/admin/users/wipe'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const res = await ctx.env.DB.prepare('DELETE FROM users WHERE is_owner = 0').run();
+  return json({ ok: true, removed: res.meta.changes });
+};
+writes['POST /api/admin/consequences/wipe'] = ownerWipe((DB) => [
+  DB.prepare('DELETE FROM consequences'), ...wipeTranslations(DB, ['consequence'])]);
+writes['POST /api/admin/contestants/wipe'] = ownerWipe((DB) => [
+  DB.prepare('DELETE FROM contestants'),
+  ...NIGHTS.flatMap((n) => [setSettingStmt(DB, `voting_status_${n}`, 'closed'), setSettingStmt(DB, `voting_started_${n}`, '0'),
+    setSettingStmt(DB, `results_phase_${n}`, 'hidden')])]);
+writes['POST /api/admin/plaza-posts/wipe'] = ownerWipe((DB) => [
+  DB.prepare('DELETE FROM plaza_posts'), ...wipeTranslations(DB, ['plaza_post', 'poll_option', 'link_item'])]);
+writes['POST /api/admin/chat/wipe'] = ownerWipe((DB) => [
+  DB.prepare('DELETE FROM messages'), ...wipeTranslations(DB, ['message'])]);
+
+const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login', '/api/auth/unclaimed-users', 'POST /api/auth/claim-key']);
 
 // Routes with a path piece in them that is not a plain number (a day, or file routes).
 const getDyn = [];

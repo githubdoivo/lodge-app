@@ -4,7 +4,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { createHmac, createHash, createDecipheriv } from 'node:crypto';
+import { createHmac, createHash, createDecipheriv, createCipheriv } from 'node:crypto';
 import worker, { resetDemoSeedFlag } from '../src/worker.js';
 import { generateDemoUserToken, MOCK_NAMES } from '../src/demoUsers.js';
 
@@ -18,7 +18,7 @@ function d1(db) {
     bind: (...a) => wrap(sql, a),
     first: async () => db.prepare(sql).get(...args) ?? null,
     all: async () => ({ results: db.prepare(sql).all(...args) }),
-    run: async () => db.prepare(sql).run(...args),
+    run: async () => { const r = db.prepare(sql).run(...args); return { ...r, meta: { changes: Number(r.changes) } }; },
   });
   return { prepare: (sql) => wrap(sql), batch: async (stmts) => { for (const st of stmts) await st.run(); } };
 }
@@ -402,4 +402,65 @@ test('logo flag: only true or false', async () => {
   assert.equal((await post('/api/me/logo-customized', 'ana-key', { customized: 'yes' })).status, 400);
   assert.equal((await post('/api/me/logo-customized', 'ana-key', { customized: true })).status, 200);
   assert.equal(testDb.prepare('SELECT logo_customized FROM users WHERE id = 1').get().logo_customized, 1);
+});
+
+// ---- Key change, key claim, wipes (APP-LG-017) ----
+const encrypt = (text) => {
+  const iv = Buffer.alloc(12, 1);
+  const c = createCipheriv('aes-256-gcm', createHash('sha256').update(SECRET).digest(), iv);
+  const ct = Buffer.concat([c.update(text), c.final()]);
+  return `${iv.toString('base64')}:${c.getAuthTag().toString('base64')}:${ct.toString('base64')}`;
+};
+test('change key: wrong current, bad chars, too short and taken are refused; the new key signs in', async () => {
+  const ch = (body, key = 'ana-key') => post('/api/me/change-token', key, body);
+  assert.equal(await errOf(await ch({ currentToken: 'nope', newToken: 'anakey2' })), 'err_current_key_wrong');
+  assert.equal(await errOf(await ch({ currentToken: 'ana-key', newToken: 'ana key!' })), 'err_key_invalid_chars');
+  assert.equal(await errOf(await ch({ currentToken: 'ana-key', newToken: 'ab12' })), 'err_key_too_short');
+  assert.equal(await errOf(await ch({ currentToken: 'ana-key', newToken: 'ab12' })), 'err_key_too_short'); // twice, same answer
+  testDb.prepare('UPDATE users SET token_hash = ? WHERE id = 2').run(hash('takenkey1'));
+  assert.equal(await errOf(await ch({ currentToken: 'ana-key', newToken: 'TakenKey1' })), 'err_key_taken');
+  testDb.prepare('UPDATE users SET token_hash = ? WHERE id = 2').run(hash('rui-key'));
+  assert.equal((await ch({ currentToken: 'ANA-KEY', newToken: ' AnaNova7 ' })).status, 200);
+  assert.equal((await get('/api/me', 'ana-key')).status, 401);
+  assert.equal((await get('/api/me', 'ananova7')).status, 200);
+  assert.equal(decode(testDb.prepare('SELECT token_enc FROM users WHERE id = 1').get().token_enc), 'ananova7');
+  testDb.prepare("UPDATE users SET token_hash = ?, token_enc = 'x' WHERE id = 1").run(hash('ana-key'));
+});
+test('claim key: 3+ letters, accents folded, works once even when tapped twice at once', async () => {
+  const { db, env: e } = emptyEnv('production');
+  db.prepare('INSERT INTO users (name, token_hash, token_enc) VALUES (?, ?, ?)').run('César', hash('cesar123456'), encrypt('cesar123456'));
+  const find = async (name) => (await (await get('/api/auth/unclaimed-users?name=' + encodeURIComponent(name), null, e)).json()).users;
+  assert.deepEqual(await find('ce'), []);
+  assert.deepEqual((await find('CESA')).map((u) => u.name), ['César']);
+  const claim = (userId) => send('POST', '/api/auth/claim-key', null, { userId }, e);
+  assert.equal(await errOf(await claim(999)), 'err_user_not_found');
+  const bodies = await Promise.all((await Promise.all([claim(1), claim(1), claim(1)])).map((r) => r.json()));
+  assert.equal(bodies.filter((x) => x.token === 'cesar123456').length, 1);
+  assert.equal(bodies.filter((x) => x.error === 'err_key_already_claimed').length, 2);
+  assert.deepEqual(await find('cesa'), []);
+});
+test('wipes: only the owner; each clears its own data and translations; voting resets', async () => {
+  const { db, env: e } = emptyEnv('production');
+  db.prepare("INSERT INTO users (name, token_hash, token_enc, is_owner, is_admin) VALUES ('Ivo', 'h1', 'x', 1, 1)").run();
+  db.prepare("INSERT INTO users (name, token_hash, token_enc, is_admin) VALUES ('Rui', 'h2', 'x', 1)").run();
+  db.prepare("INSERT INTO users (name, token_hash, token_enc) VALUES ('Ana', 'h3', 'x')").run();
+  db.prepare('INSERT INTO sessions (token_hash, user_id) VALUES (?, 1)').run(hash('s.own'));
+  db.prepare('INSERT INTO sessions (token_hash, user_id) VALUES (?, 2)').run(hash('s.rui'));
+  db.prepare("INSERT INTO messages (user_id, text) VALUES (3, 'hi')").run();
+  const tr = db.prepare("INSERT INTO translations (entity_type, entity_id, field, lang, text) VALUES (?, 1, 'text', 'en', 'x')");
+  tr.run('message'); tr.run('consequence');
+  db.prepare("INSERT INTO settings (key, value) VALUES ('voting_status_furnished', 'open')").run();
+  const w = (path, key) => send('POST', path, key, {}, e);
+  for (const p of ['users', 'consequences', 'contestants', 'plaza-posts', 'chat']) {
+    assert.equal((await w(`/api/admin/${p}/wipe`, 's.rui')).status, 403);
+  }
+  await w('/api/admin/chat/wipe', 's.own');
+  assert.equal((await w('/api/admin/chat/wipe', 's.own')).status, 200); // twice is fine
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM messages').get().n, 0);
+  assert.deepEqual(db.prepare('SELECT entity_type FROM translations').all().map((r) => r.entity_type), ['consequence']);
+  await w('/api/admin/contestants/wipe', 's.own');
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'voting_status_furnished'").get().value, 'closed');
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'results_phase_swamp'").get().value, 'hidden');
+  assert.equal((await (await w('/api/admin/users/wipe', 's.own')).json()).removed, 2);
+  assert.deepEqual(db.prepare('SELECT name FROM users').all().map((u) => u.name), ['Ivo']);
 });
