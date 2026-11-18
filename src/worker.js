@@ -2,7 +2,7 @@
 // first writes APP-LG-012). Pages are served by the assets binding; only
 // /api/* reaches this file. Writes not ported yet answer 405.
 import pkg from '../package.json' with { type: 'json' };
-import { validatePostContent } from './plaza-rules.js';
+import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -193,6 +193,111 @@ const writes = {
     return json({ ok: true });
   },
 };
+
+// Voting day (YYYY-MM-DD, Europe/Lisbon), rolling over at day_rollover_hour
+// (default 6) like today() in src/time.js, which cannot load here (node:sqlite).
+async function votingDay(env) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'day_rollover_hour'").first();
+  const rollover = row ? Number(row.value) : 6;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Lisbon', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date()).map((p) => [p.type, p.value]));
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  if (Number(parts.hour) >= rollover) return date;
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+const ONE_CONSEQUENCE = `
+  SELECT c.id, c.text, c.revealed_at, u.name AS author,
+         c.assigned_user_id, a.name AS assignedName, c.done_at, c.approved_at
+  FROM consequences c JOIN users u ON u.id = c.user_id
+  LEFT JOIN users a ON a.id = c.assigned_user_id WHERE c.id = ?`;
+const oneConsequence = (env, id) => env.DB.prepare(ONE_CONSEQUENCE).bind(id).first();
+
+// Wall edit (src/plaza.js updatePlazaPost). Photos wait for R2 (APP-LG-010);
+// translations are not on the Worker yet, so old ones are cleared.
+writes['PATCH /api/admin/plaza-posts/:id'] = async (ctx) => {
+  const off = plazaOff(ctx) || adminOnly(ctx); if (off) return off;
+  const DB = ctx.env.DB;
+  const post = await postExists(ctx, ctx.id);
+  if (!post) return json({ error: 'err_post_not_found' }, 404);
+  if (!POST_TYPES.includes(post.type)) return json({ error: 'err_post_not_editable' }, 400);
+  const { text, options, links, photoBase64 } = ctx.body;
+  const clean = validatePostContent(post.type, { text, options, links });
+  if (clean.error) return json({ error: clean.error }, 400);
+  if (photoBase64) return json({ error: 'err_photo_not_yet' }, 400);
+  const stmts = [DB.prepare('UPDATE plaza_posts SET text = ? WHERE id = ?').bind(clean.text, ctx.id)];
+  if (photoBase64 === null || photoBase64 === '') stmts.push(DB.prepare('UPDATE plaza_posts SET photo = NULL, photo_mime = NULL WHERE id = ?').bind(ctx.id));
+  if (post.type === 'poll') {
+    // By position, so renaming an option keeps its votes.
+    const { results: existing } = await DB.prepare('SELECT id FROM plaza_poll_options WHERE post_id = ? ORDER BY position ASC, id ASC').bind(ctx.id).all();
+    clean.options.forEach((label, i) => stmts.push(existing[i]
+      ? DB.prepare('UPDATE plaza_poll_options SET label = ? WHERE id = ?').bind(label, existing[i].id)
+      : DB.prepare('INSERT INTO plaza_poll_options (post_id, label, position) VALUES (?, ?, ?)').bind(ctx.id, label, i)));
+    existing.slice(clean.options.length).forEach((o) => stmts.push(DB.prepare('DELETE FROM plaza_poll_options WHERE id = ?').bind(o.id)));
+  }
+  if (post.type === 'links') {
+    stmts.push(DB.prepare('DELETE FROM plaza_link_items WHERE post_id = ?').bind(ctx.id));
+    clean.links.forEach((l, i) => stmts.push(DB.prepare('INSERT INTO plaza_link_items (post_id, emoji, label, url, position) VALUES (?, ?, ?, ?, ?)').bind(ctx.id, l.emoji, l.label, l.url, i)));
+  }
+  stmts.push(DB.prepare("DELETE FROM translations WHERE entity_type = 'plaza_post' AND entity_id = ?").bind(ctx.id));
+  await DB.batch(stmts);
+  return json({ ok: true, id: ctx.id });
+};
+
+// Rata (src/routes.js + src/consequences.js). Push and translations are not on the Worker yet.
+writes['POST /api/consequences'] = async (ctx) => {
+  const text = (typeof ctx.body.text === 'string' ? ctx.body.text : '').trim();
+  if (!text) return json({ error: 'err_consequence_text_required' }, 400);
+  if (text.length > 200) return json({ error: 'err_max_200_chars' }, 400);
+  const day = await votingDay(ctx.env);
+  const mine = await ctx.env.DB.prepare('SELECT id FROM consequences WHERE user_id = ? AND day = ?').bind(ctx.user.id, day).first();
+  if (mine) return json({ error: 'err_consequence_already_suggested_today' }, 409);
+  try {
+    await ctx.env.DB.prepare(`INSERT INTO consequences (user_id, text, day, created_at) VALUES (?, ?, ?, ${now})`).bind(ctx.user.id, text, day).run();
+  } catch (err) {
+    if (/UNIQUE constraint failed/.test(String(err?.message))) return json({ error: 'err_consequence_already_suggested_today' }, 409);
+    throw err;
+  }
+  return json({ ok: true }, 201);
+};
+writes['POST /api/consequences/:id/mark-done'] = async (ctx) => {
+  const c = await ctx.env.DB.prepare("SELECT id, assigned_user_id, done_at FROM consequences WHERE id = ? AND status = 'used'").bind(ctx.id).first();
+  if (!c) return json({ error: 'err_consequence_not_found' }, 400);
+  if (c.assigned_user_id !== ctx.user.id) return json({ error: 'err_consequence_not_assigned_to_you' }, 400);
+  if (c.done_at) return json({ error: 'err_consequence_already_done' }, 400);
+  await ctx.env.DB.prepare(`UPDATE consequences SET done_at = ${now} WHERE id = ? AND done_at IS NULL`).bind(ctx.id).run();
+  return json({ ok: true, consequence: await oneConsequence(ctx.env, ctx.id) });
+};
+writes['PATCH /api/admin/consequences/:id/assign'] = async (ctx) => {
+  const off = adminOnly(ctx); if (off) return off;
+  const userId = ctx.body.userId === null ? null : Number(ctx.body.userId);
+  if (userId !== null && !(await ctx.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first())) return json({ error: 'err_user_not_found' }, 404);
+  const c = await ctx.env.DB.prepare("SELECT id FROM consequences WHERE id = ? AND status = 'used'").bind(ctx.id).first();
+  if (!c) return json({ error: 'err_consequence_not_found' }, 404);
+  await ctx.env.DB.prepare(`UPDATE consequences SET assigned_user_id = ?, assigned_at = CASE WHEN ? IS NULL THEN NULL ELSE ${now} END WHERE id = ?`).bind(userId, userId, ctx.id).run();
+  return json({ ok: true, consequence: await oneConsequence(ctx.env, ctx.id) });
+};
+writes['PATCH /api/admin/consequences/:id/approve'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const c = await ctx.env.DB.prepare('SELECT id, done_at, approved_at FROM consequences WHERE id = ?').bind(ctx.id).first();
+  if (!c) return json({ error: 'err_consequence_not_found' }, 400);
+  if (!c.done_at) return json({ error: 'err_consequence_not_done_yet' }, 400);
+  if (c.approved_at) return json({ error: 'err_consequence_already_approved' }, 400);
+  await ctx.env.DB.prepare(`UPDATE consequences SET approved_at = ${now} WHERE id = ?`).bind(ctx.id).run();
+  return json({ ok: true, consequence: await oneConsequence(ctx.env, ctx.id) });
+};
+writes['POST /api/admin/consequences/reveal'] = async (ctx) => {
+  const off = adminOnly(ctx); if (off) return off;
+  const pick = await ctx.env.DB.prepare(`SELECT c.id, c.text, u.name AS author FROM consequences c JOIN users u ON u.id = c.user_id
+    WHERE c.status = 'pending' ORDER BY RANDOM() LIMIT 1`).first();
+  if (!pick) return json({ error: 'err_no_pending_consequences' }, 404);
+  await ctx.env.DB.prepare(`UPDATE consequences SET status = 'used', revealed_at = ${now} WHERE id = ? AND status = 'pending'`).bind(pick.id).run();
+  return json({ ok: true, revealed: pick });
+};
+
 const PUBLIC = new Set(['/api/version', 'POST /api/auth/login']);
 
 export default {

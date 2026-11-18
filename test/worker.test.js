@@ -94,7 +94,7 @@ test('users/basic leaves out the caller', async () => {
   assert.deepEqual(await (await get('/api/users/basic', 'ana-key')).json(), [{ id: 3, name: 'Ivo' }, { id: 2, name: 'Rui' }]);
 });
 test('writes not ported yet and unknown routes are refused', async () => {
-  const post = await worker.fetch(new Request('https://x.test/api/consequences', { method: 'POST' }), env);
+  const post = await worker.fetch(new Request('https://x.test/api/chat', { method: 'POST' }), env);
   assert.equal(post.status, 405);
   assert.equal((await get('/api/nope', 'ana-key')).status, 404);
 });
@@ -180,4 +180,52 @@ test('new wall post: admins only, same rules as Node, poll options and links sav
   assert.equal(p.text, 'lunch?');
   assert.deepEqual(p.options.map((o) => o.label), ['soup', 'fish']);
   assert.equal(testDb.prepare('SELECT url FROM plaza_link_items WHERE post_id = ?').get(links.id).url, 'https://maps.example.com/');
+});
+
+test('wall edit: admins only, text and poll options (votes kept on rename), links replaced, photo refused', async () => {
+  const poll = (await (await send('POST', '/api/admin/plaza-posts', 'rui-key', { type: 'poll', text: 'q?', options: ['a', 'b', 'c'] })).json()).id;
+  const opt = testDb.prepare('SELECT id FROM plaza_poll_options WHERE post_id = ? AND position = 0').get(poll).id;
+  testDb.prepare('INSERT INTO plaza_poll_votes (post_id, option_id, user_id) VALUES (?, ?, 1)').run(poll, opt);
+  assert.equal((await send('PATCH', `/api/admin/plaza-posts/${poll}`, 'ana-key', { text: 'x' })).status, 403);
+  assert.equal((await send('PATCH', '/api/admin/plaza-posts/9999', 'rui-key', { text: 'x' })).status, 404);
+  assert.equal((await (await send('PATCH', `/api/admin/plaza-posts/${poll}`, 'rui-key', { text: ' ', options: ['a', 'b'] })).json()).error, 'err_post_text_required');
+  assert.equal((await send('PATCH', `/api/admin/plaza-posts/${poll}`, 'rui-key', { text: 'q', options: ['a', 'b'], photoBase64: 'data:x' })).status, 400);
+  assert.equal((await send('PATCH', `/api/admin/plaza-posts/${poll}`, 'rui-key', { text: 'new q', options: ['A!', 'b'] })).status, 200);
+  assert.deepEqual(testDb.prepare('SELECT label FROM plaza_poll_options WHERE post_id = ? ORDER BY position').all(poll).map((o) => o.label), ['A!', 'b']);
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM plaza_poll_votes WHERE option_id = ?').get(opt).n, 1);
+  const l = (await (await send('POST', '/api/admin/plaza-posts', 'rui-key', { type: 'links', text: 'l', links: [{ label: 'a', url: 'a.example.com' }] })).json()).id;
+  await send('PATCH', `/api/admin/plaza-posts/${l}`, 'rui-key', { text: 'l2', links: [{ label: 'b', url: 'b.example.com' }, { label: 'c', url: 'c.example.com' }] });
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM plaza_link_items WHERE post_id = ?').get(l).n, 2);
+});
+test('rata: one suggestion a day, empty and long ones refused, a double tap makes one', async () => {
+  assert.equal((await send('POST', '/api/consequences', 'ana-key', { text: '  ' })).status, 400);
+  assert.equal((await (await send('POST', '/api/consequences', 'ana-key', { text: 'x'.repeat(201) })).json()).error, 'err_max_200_chars');
+  const two = await Promise.all([1, 2].map(() => send('POST', '/api/consequences', 'ana-key', { text: 'juggle' })));
+  assert.deepEqual(two.map((r) => r.status).sort(), [201, 409]);
+  assert.equal(testDb.prepare("SELECT COUNT(*) n FROM consequences WHERE text = 'juggle'").get().n, 1);
+});
+test('rata: reveal, assign, mark done and approve follow the same order and roles as Node', async () => {
+  assert.equal((await send('POST', '/api/admin/consequences/reveal', 'ana-key')).status, 403);
+  const revealed = await (await send('POST', '/api/admin/consequences/reveal', 'rui-key')).json();
+  assert.ok(revealed.ok);
+  const id = revealed.revealed.id;
+  assert.equal((await send('POST', '/api/admin/consequences/reveal', 'rui-key').then((r) => r.json())).revealed?.id === id, false);
+  assert.equal((await send('PATCH', `/api/admin/consequences/${id}/assign`, 'ana-key', { userId: 1 })).status, 403);
+  assert.equal((await send('PATCH', `/api/admin/consequences/${id}/assign`, 'rui-key', { userId: 99 })).status, 404);
+  assert.equal((await send('PATCH', '/api/admin/consequences/9999/assign', 'rui-key', { userId: 1 })).status, 404);
+  const a = await (await send('PATCH', `/api/admin/consequences/${id}/assign`, 'rui-key', { userId: 1 })).json();
+  assert.equal(a.consequence.assignedName, 'Ana');
+  assert.equal((await send('POST', `/api/consequences/${id}/mark-done`, 'rui-key')).status, 400);
+  assert.equal((await (await send('PATCH', `/api/admin/consequences/${id}/approve`, 'ivo-key')).json()).error, 'err_consequence_not_done_yet');
+  assert.equal((await send('POST', `/api/consequences/${id}/mark-done`, 'ana-key')).status, 200);
+  assert.equal((await (await send('POST', `/api/consequences/${id}/mark-done`, 'ana-key')).json()).error, 'err_consequence_already_done');
+  assert.equal((await send('PATCH', `/api/admin/consequences/${id}/approve`, 'rui-key')).status, 403);
+  assert.equal((await send('PATCH', `/api/admin/consequences/${id}/approve`, 'ivo-key')).status, 200);
+  assert.equal((await (await send('PATCH', `/api/admin/consequences/${id}/approve`, 'ivo-key')).json()).error, 'err_consequence_already_approved');
+  const un = await (await send('PATCH', `/api/admin/consequences/${id}/assign`, 'rui-key', { userId: null })).json();
+  assert.equal(un.consequence.assigned_user_id, null);
+});
+test('rata: reveal with nothing pending is a 404', async () => {
+  testDb.prepare("UPDATE consequences SET status = 'used' WHERE status = 'pending'").run();
+  assert.equal((await send('POST', '/api/admin/consequences/reveal', 'rui-key')).status, 404);
 });
