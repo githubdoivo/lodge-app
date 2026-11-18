@@ -5,6 +5,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT } from './nights.js';
+import { addMemoRoutes } from './workerMemo.js';
 import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
 const json = (body, status = 200) =>
@@ -609,22 +610,30 @@ writes['PATCH /api/admin/users/:id/admin'] = async (ctx) => {
 
 const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login']);
 
+// Routes with a path piece in them that is not a plain number (a day, or file routes).
+const getDyn = [];
+const writeDyn = [];
+addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     const path = url.pathname.replace(/\/+$/, '');
-    const ctx = { env, url };
-    let handler, key;
+    const ctx = { env, url, request };
+    let handler, key, m;
     if (request.method === 'GET') {
       handler = routes[path]; key = path;
+      if (!handler) for (const [re, h] of getDyn) { if ((m = path.match(re))) { handler = (c) => h(c, m); break; } }
     } else {
-      const m = path.match(/^(.*\/)(\d+)(\/[^/]+)?$/);
-      key = `${request.method} ${m ? `${m[1]}:id${m[3] || ''}` : path}`;
-      if (m) ctx.id = Number(m[2]);
+      const n = path.match(/^(.*\/)(\d+)(\/[^/]+)?$/);
+      key = `${request.method} ${n ? `${n[1]}:id${n[3] || ''}` : path}`;
+      if (n) ctx.id = Number(n[2]);
       handler = writes[key];
+      if (!handler) for (const [method, re, h] of writeDyn) { if (method === request.method && (m = path.match(re))) { handler = (c) => h(c, m); break; } }
       if (!handler) return json({ error: 'err_read_only' }, 405);
-      ctx.body = await readBody(request);
+      // File uploads (multipart) are read by their own handler from ctx.request.
+      ctx.body = (request.headers.get('content-type') || '').includes('multipart/form-data') ? {} : await readBody(request);
     }
     if (!handler) return json({ error: 'err_not_found' }, 404);
     await ensureDemoUsers(env);
