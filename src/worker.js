@@ -5,7 +5,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT } from './nights.js';
-import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken } from './demoUsers.js';
+import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -130,7 +130,7 @@ const routes = {
   '/api/me': async (ctx) => json({
     ...ctx.user,
     plazaEnabled: ctx.env.ENABLE_PLAZA === 'true',
-    adminPromotionEnabled: false,
+    adminPromotionEnabled: ctx.env.ENABLE_ADMIN_PROMOTION === 'true',
   }),
   '/api/plaza-posts': async (ctx) => {
     if (ctx.env.ENABLE_PLAZA !== 'true') return json({ error: 'err_not_found' }, 404);
@@ -478,6 +478,133 @@ writes['POST /api/chat/messages'] = async (ctx) => {
   await DB.prepare('INSERT INTO messages (user_id, text, pseudonym) VALUES (?, ?, ?)').bind(ctx.user.id, text, pseudonym).run();
   await DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 15)').run();
   return json({ ok: true }, 201);
+};
+
+// ---- Manage Users, settings, dedications (APP-LG-015 slice 1) ----
+async function decryptToken(secret, enc) {
+  try {
+    const raw = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+    const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    const [iv, tag, ct] = String(enc).split(':').map((x) => Uint8Array.from(atob(x), (c) => c.charCodeAt(0)));
+    const joined = new Uint8Array(ct.length + tag.length); joined.set(ct); joined.set(tag, ct.length);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, joined));
+  } catch { return null; }
+}
+async function newUserKey(env, name) {
+  const base = tokenBase(name);
+  for (;;) {
+    const token = `${base}${String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0')}`;
+    const hash = await hashToken(env.TOKEN_SECRET, token);
+    if (!(await env.DB.prepare('SELECT 1 AS x FROM users WHERE token_hash = ?').bind(hash).first())) return { token, hash };
+  }
+}
+const cleanName = (b) => String(b?.name ?? '').trim();
+const userExists = (ctx, id) => ctx.env.DB.prepare('SELECT id, name, is_owner, is_admin FROM users WHERE id = ?').bind(id).first();
+const myDedication = (ctx) => ctx.env.DB.prepare('SELECT text, updated_at FROM dedications WHERE user_id = ?').bind(ctx.user.id).first();
+
+routes['/api/admin/users'] = async (ctx) => {
+  const off = adminOnly(ctx); if (off) return off;
+  const { results } = await ctx.env.DB.prepare(
+    'SELECT id, name, token_enc, is_admin, is_owner, created_at FROM users ORDER BY is_owner DESC, name COLLATE NOCASE ASC').all();
+  const visible = ctx.user.is_owner ? results : results.filter((u) => u.id === ctx.user.id);
+  return json(await Promise.all(visible.map(async (u) => ({
+    id: u.id, name: u.name, token: await decryptToken(ctx.env.TOKEN_SECRET, u.token_enc),
+    is_admin: !!u.is_admin, is_owner: !!u.is_owner, created_at: u.created_at,
+  }))));
+};
+routes['/api/admin/settings'] = async (ctx) => {
+  const off = adminOnly(ctx); if (off) return off;
+  const row = await ctx.env.DB.prepare("SELECT value FROM settings WHERE key = 'day_rollover_hour'").first();
+  return json({ dayRolloverHour: Number(row ? row.value : 6) });
+};
+routes['/api/dedications/mine'] = async (ctx) => json({ dedication: await myDedication(ctx) });
+routes['/api/admin/dedications'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const { results } = await ctx.env.DB.prepare(`SELECT d.id, d.text, d.created_at, d.updated_at, u.name AS author
+    FROM dedications d JOIN users u ON u.id = d.user_id ORDER BY d.created_at`).all();
+  return json({ dedications: results });
+};
+
+writes['PUT /api/admin/settings'] = async (ctx) => {
+  const off = adminOnly(ctx); if (off) return off;
+  const { dayRolloverHour } = ctx.body;
+  if (dayRolloverHour !== undefined) {
+    const h = Number(dayRolloverHour);
+    if (!Number.isInteger(h) || h < 0 || h > 23) return json({ error: 'err_invalid_rollover_hour' }, 400);
+    await ctx.env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('day_rollover_hour', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(String(h)).run();
+  }
+  return json({ ok: true });
+};
+writes['PUT /api/dedications/mine'] = async (ctx) => {
+  const text = String(ctx.body.text ?? '').trim();
+  if (!text) return json({ error: 'err_dedication_empty' }, 400);
+  await ctx.env.DB.prepare(`INSERT INTO dedications (user_id, text) VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET text = excluded.text, updated_at = ${now}`).bind(ctx.user.id, text).run();
+  return json({ ok: true, dedication: await myDedication(ctx) });
+};
+writes['POST /api/admin/dedications/wipe'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  await ctx.env.DB.prepare('DELETE FROM dedications').run();
+  return json({ ok: true });
+};
+writes['POST /api/me/logo-customized'] = async (ctx) => {
+  const c = ctx.body.customized;
+  if (c !== true && c !== false) return json({ error: 'err_invalid_logo_value' }, 400);
+  await ctx.env.DB.prepare('UPDATE users SET logo_customized = ? WHERE id = ?').bind(c ? 1 : 0, ctx.user.id).run();
+  return json({ ok: true, logo_customized: c });
+};
+writes['POST /api/admin/users'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const name = cleanName(ctx.body);
+  if (!name) return json({ error: 'err_name_missing' }, 400);
+  const { token, hash } = await newUserKey(ctx.env, name);
+  const row = await ctx.env.DB.prepare(
+    `INSERT INTO users (name, token_hash, token_enc, is_admin, updated_at) VALUES (?, ?, ?, 0, ${now}) RETURNING id`)
+    .bind(name, hash, await encryptToken(ctx.env.TOKEN_SECRET, token)).first();
+  return json({ id: row.id, name, token }, 201);
+};
+writes['PATCH /api/admin/users/:id/name'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const name = cleanName(ctx.body);
+  if (!name) return json({ error: 'err_name_missing' }, 400);
+  if (!(await userExists(ctx, ctx.id))) return json({ error: 'err_user_not_found' }, 404);
+  await ctx.env.DB.prepare(`UPDATE users SET name = ?, updated_at = ${now} WHERE id = ?`).bind(name, ctx.id).run();
+  return json({ ok: true, id: ctx.id, name });
+};
+writes['POST /api/admin/users/:id/regenerate-token'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const user = await userExists(ctx, ctx.id);
+  if (!user) return json({ error: 'err_user_not_found' }, 404);
+  const { token, hash } = await newUserKey(ctx.env, user.name);
+  await ctx.env.DB.batch([
+    ctx.env.DB.prepare(`UPDATE users SET token_hash = ?, token_enc = ?, updated_at = ${now}, key_claimed_at = NULL WHERE id = ?`)
+      .bind(hash, await encryptToken(ctx.env.TOKEN_SECRET, token), ctx.id),
+    ctx.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(ctx.id),
+  ]);
+  return json({ ok: true, id: ctx.id, name: user.name, token });
+};
+writes['DELETE /api/admin/users/:id'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  const user = await userExists(ctx, ctx.id);
+  if (!user) return json({ error: 'err_user_not_found' }, 404);
+  if (user.is_owner) return json({ error: 'err_cannot_remove_owner' }, 400);
+  await ctx.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(ctx.id).run();
+  return json({ ok: true });
+};
+writes['PATCH /api/admin/users/:id/admin'] = async (ctx) => {
+  const off = ownerOnly(ctx); if (off) return off;
+  if (ctx.env.ENABLE_ADMIN_PROMOTION !== 'true') return json({ error: 'err_feature_disabled' }, 403);
+  const isAdmin = !!ctx.body.isAdmin;
+  const user = await userExists(ctx, ctx.id);
+  if (!user) return json({ error: 'err_user_not_found' }, 404);
+  if (!isAdmin && user.is_owner) return json({ error: 'err_cannot_demote_owner' }, 400);
+  if (!isAdmin && user.is_admin) {
+    const { c } = await ctx.env.DB.prepare('SELECT count(*) AS c FROM users WHERE is_admin = 1').first();
+    if (c <= 1) return json({ error: 'err_last_admin' }, 400);
+  }
+  await ctx.env.DB.prepare(`UPDATE users SET is_admin = ?, updated_at = ${now} WHERE id = ?`).bind(isAdmin ? 1 : 0, ctx.id).run();
+  return json({ ok: true, is_admin: isAdmin }); // the push to that person comes with the push card
 };
 
 const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login']);

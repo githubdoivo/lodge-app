@@ -338,3 +338,68 @@ test('off the demo: nothing is seeded and no keys are offered', async () => {
   assert.deepEqual((await (await get('/api/demo', null, e)).json()).keys, []);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM users').get().n, 0);
 });
+
+// ---- Manage Users, settings, dedications (APP-LG-015) ----
+const del = (path, key) => send('DELETE', path, key);
+const decode = (enc) => {
+  const [iv, tag, ct] = enc.split(':').map((x) => Buffer.from(x, 'base64'));
+  const d = createDecipheriv('aes-256-gcm', createHash('sha256').update(SECRET).digest(), iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(ct), d.final()]).toString();
+};
+test('users: guests are refused, a plain admin sees only their own row, the owner sees all', async () => {
+  assert.equal((await get('/api/admin/users', 'ana-key')).status, 403);
+  assert.deepEqual((await (await get('/api/admin/users', 'rui-key')).json()).map((u) => u.name), ['Rui']);
+  assert.ok((await (await get('/api/admin/users', 's.abc')).json()).length >= 3);
+});
+test('users: only the owner adds, renames, regenerates and removes; blanks refused', async () => {
+  assert.equal((await post('/api/admin/users', 'rui-key', { name: 'X' })).status, 403);
+  assert.equal((await post('/api/admin/users', 's.abc', { name: '  ' })).status, 400);
+  const made = await (await post('/api/admin/users', 's.abc', { name: 'Zé Novo' })).json();
+  assert.match(made.token, /^zenovo\d{6}$/);
+  const row = testDb.prepare('SELECT token_hash, token_enc FROM users WHERE id = ?').get(made.id);
+  assert.equal(row.token_hash, hash(made.token));
+  assert.equal(decode(row.token_enc), made.token);
+  assert.equal((await send('PATCH', `/api/admin/users/${made.id}/name`, 's.abc', { name: 'Zé Velho' })).status, 200);
+  assert.equal((await send('PATCH', '/api/admin/users/9999/name', 's.abc', { name: 'a' })).status, 404);
+  const re = await (await post(`/api/admin/users/${made.id}/regenerate-token`, 's.abc')).json();
+  assert.notEqual(re.token, made.token);
+  assert.equal((await get('/api/me', made.token)).status, 401);
+  assert.equal((await del(`/api/admin/users/${made.id}`, 's.abc')).status, 200);
+  assert.equal((await del('/api/admin/users/3', 's.abc')).status, 400);
+});
+test('users: promotion keeps one admin and never demotes the owner', async () => {
+  const off = { ...env, ENABLE_ADMIN_PROMOTION: 'false' };
+  const on = { ...env, ENABLE_ADMIN_PROMOTION: 'true' };
+  assert.equal((await send('PATCH', '/api/admin/users/1/admin', 'rui-key', { isAdmin: true }, on)).status, 403);
+  assert.equal((await send('PATCH', '/api/admin/users/1/admin', 's.abc', { isAdmin: true }, off)).status, 403);
+  assert.equal((await send('PATCH', '/api/admin/users/1/admin', 's.abc', { isAdmin: true }, on)).status, 200);
+  assert.equal((await send('PATCH', '/api/admin/users/3/admin', 's.abc', { isAdmin: false }, on)).status, 400);
+  assert.equal((await send('PATCH', '/api/admin/users/1/admin', 's.abc', { isAdmin: false }, on)).status, 200);
+});
+test('settings: rollover hour reads, saves, and refuses bad values', async () => {
+  assert.equal((await (await get('/api/admin/settings', 'rui-key')).json()).dayRolloverHour, 6);
+  assert.equal((await send('PUT', '/api/admin/settings', 'ana-key', { dayRolloverHour: 5 })).status, 403);
+  for (const bad of [24, -1, 1.5, 'x']) assert.equal((await send('PUT', '/api/admin/settings', 'rui-key', { dayRolloverHour: bad })).status, 400);
+  assert.equal((await send('PUT', '/api/admin/settings', 'rui-key', { dayRolloverHour: 4 })).status, 200);
+  assert.equal((await (await get('/api/admin/settings', 'rui-key')).json()).dayRolloverHour, 4);
+  await send('PUT', '/api/admin/settings', 'rui-key', { dayRolloverHour: 6 });
+});
+test('dedications: one per guest and rewritten in place; only the owner reads or wipes', async () => {
+  assert.deepEqual(await (await get('/api/dedications/mine', 'ana-key')).json(), { dedication: null });
+  assert.equal((await send('PUT', '/api/dedications/mine', 'ana-key', { text: '   ' })).status, 400);
+  await send('PUT', '/api/dedications/mine', 'ana-key', { text: 'one' });
+  const r = await (await send('PUT', '/api/dedications/mine', 'ana-key', { text: 'two' })).json();
+  assert.equal(r.dedication.text, 'two');
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM dedications').get().n, 1);
+  assert.equal((await get('/api/admin/dedications', 'rui-key')).status, 403);
+  assert.equal((await (await get('/api/admin/dedications', 's.abc')).json()).dedications[0].author, 'Ana');
+  assert.equal((await post('/api/admin/dedications/wipe', 'rui-key')).status, 403);
+  await post('/api/admin/dedications/wipe', 's.abc');
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM dedications').get().n, 0);
+});
+test('logo flag: only true or false', async () => {
+  assert.equal((await post('/api/me/logo-customized', 'ana-key', { customized: 'yes' })).status, 400);
+  assert.equal((await post('/api/me/logo-customized', 'ana-key', { customized: true })).status, 200);
+  assert.equal(testDb.prepare('SELECT logo_customized FROM users WHERE id = 1').get().logo_customized, 1);
+});
