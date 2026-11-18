@@ -14,7 +14,8 @@
     "test:ui": "node --disable-warning=ExperimentalWarning --test test/ui.test.js",
     "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true",
     "screenshots": "node --disable-warning=ExperimentalWarning scripts/screenshots.js",
-    "reset-owner-faceid": "node --disable-warning=ExperimentalWarning scripts/reset-owner-faceid.js"
+    "reset-owner-faceid": "node --disable-warning=ExperimentalWarning scripts/reset-owner-faceid.js",
+    "deploy:worker": "wrangler deploy"
   },
   "engines": {
     "node": ">=23.4"

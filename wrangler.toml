@@ -1,0 +1,20 @@
+name = "lodge-demo"
+main = "src/worker.js"
+compatibility_date = "2025-11-01"
+
+# Pages and static files; /api/* always runs the Worker first.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[vars]
+APP_ENV = "demo"
+ENABLE_PLAZA = "true"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lodge-demo"
+database_id = "37b7ea98-b648-47cc-b2f2-ab0d543e9b08"
+
+# Secret (never in this file): TOKEN_SECRET, the same HMAC secret the Node app uses.
