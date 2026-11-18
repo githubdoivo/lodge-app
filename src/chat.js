@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import db from './db.js';
 import { formatTimeInZone, today } from './time.js';
 import { translationsFor } from './translations.js';
@@ -15,17 +16,6 @@ const MAX_TEXT_LENGTH = 300;
 // message) gets one of these instead of their real name - stable across
 // all their posts, so people stay recognizable to each other by their
 // pseudonym without exposing who they actually are.
-const FURNISHED_OBJECTS = [
-  'chair', 'lamp', 'rug', 'sofa', 'curtain', 'mirror', 'vase', 'shelf',
-  'candle', 'cushion', 'teapot', 'drawer', 'doormat', 'clock', 'stool',
-  'mug', 'kettle', 'blanket', 'pillow', 'doorknob', 'footstool', 'teacup',
-];
-const SWAMP_BEINGS = [
-  'wisp', 'sprite', 'witch', 'wraith', 'ghoul', 'specter', 'goblin',
-  'troll', 'hag', 'banshee', 'phantom', 'imp', 'fae', 'gremlin',
-  'mudwitch', 'bogfae', 'mosswraith', 'fenghoul', 'mirewisp', 'swampfae',
-];
-
 function randomPseudonym() {
   const object = FURNISHED_OBJECTS[randomInt(0, FURNISHED_OBJECTS.length)];
   const being = SWAMP_BEINGS[randomInt(0, SWAMP_BEINGS.length)];

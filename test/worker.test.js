@@ -229,3 +229,69 @@ test('rata: reveal with nothing pending is a 404', async () => {
   testDb.prepare("UPDATE consequences SET status = 'used' WHERE status = 'pending'").run();
   assert.equal((await send('POST', '/api/admin/consequences/reveal', 'rui-key')).status, 404);
 });
+const JPEG = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+const setStatus = (night, v) => testDb.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(`voting_status_${night}`, v);
+const errOf = async (r) => (await r.json()).error;
+const post = (path, key, body) => send('POST', path, key, body);
+test('snatch: registration needs it open, a name, a good photo; one entry each', async () => {
+  const body = { night: 'furnished', name: 'lamp', photoBase64: JPEG };
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', body)), 'err_registration_not_open');
+  setStatus('furnished', 'registration');
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', { ...body, name: ' ' })), 'err_persona_name_required');
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', { ...body, name: 'x'.repeat(61) })), 'err_max_60_chars');
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', { ...body, photoBase64: null })), 'err_photo_required');
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', { ...body, photoBase64: 'data:image/jpeg;base64,AAAA' })), 'err_photo_invalid');
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', { ...body, partnerUserId: 1 })), 'err_cannot_partner_with_self');
+  assert.equal((await post('/api/outfit/register', 'ana-key', body)).status, 201);
+  assert.equal(await errOf(await post('/api/outfit/register', 'ana-key', body)), 'err_you_already_registered');
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM contestants WHERE user_id = 1').get().n, 1);
+});
+test('snatch: duo entry waits for the partner, who can confirm; the registrant cannot', async () => {
+  const r = await (await post('/api/outfit/register', 'rui-key', { night: 'furnished', name: 'duo', photoBase64: JPEG, partnerUserId: 3 })).json();
+  assert.equal(r.pending, true);
+  assert.equal(await errOf(await post('/api/outfit/register', 'ivo-key', { night: 'furnished', name: 'z', photoBase64: JPEG })), 'err_you_already_registered');
+  assert.equal(await errOf(await post('/api/outfit/register/confirm', 'rui-key', { night: 'furnished' })), 'err_partner_must_confirm_entry');
+  assert.equal((await post('/api/outfit/register/confirm', 'ivo-key', { night: 'furnished' })).status, 200);
+  assert.equal(await errOf(await send('DELETE', '/api/outfit/register/pending', 'ivo-key', { night: 'furnished' })), 'err_you_already_registered');
+});
+test('snatch: cancelling a pending duo frees both', async () => {
+  setStatus('swamp', 'registration');
+  await post('/api/outfit/register', 'rui-key', { night: 'swamp', name: 'duo2', photoBase64: JPEG, partnerUserId: 3 });
+  assert.equal((await send('DELETE', '/api/outfit/register/pending', 'ivo-key', { night: 'swamp' })).status, 200);
+  assert.equal(await errOf(await send('DELETE', '/api/outfit/register/pending', 'ivo-key', { night: 'swamp' })), 'err_no_pending_entry');
+});
+test('snatch: votes follow the night status, own entry, one vote, duo confirm', async () => {
+  const ana = testDb.prepare("SELECT id FROM contestants WHERE user_id = 1 AND night = 'furnished'").get().id;
+  const duo = testDb.prepare("SELECT id FROM contestants WHERE user_id = 2 AND night = 'furnished'").get().id;
+  const vote = (key, contestantId) => post('/api/votes', key, { contestantId, night: 'furnished' });
+  assert.equal(await errOf(await vote('rui-key', ana)), 'err_voting_not_open');
+  setStatus('furnished', 'open');
+  assert.equal(await errOf(await vote('rui-key', 9999)), 'err_contestant_invalid_for_night');
+  assert.equal(await errOf(await vote('ana-key', ana)), 'err_cannot_vote_self');
+  assert.equal(await errOf(await post('/api/votes', 'rui-key', { night: 'furnished' })), 'err_choose_contestant');
+  assert.equal(await errOf(await vote('ivo-key', duo)), 'err_cannot_vote_self');
+  assert.equal((await (await vote('ana-key', duo)).json()).pending, false);
+  assert.equal(await errOf(await vote('ana-key', duo)), 'err_already_voted');
+});
+test('snatch: a duo shares one vote that the other half must confirm', async () => {
+  const ana = testDb.prepare("SELECT id FROM contestants WHERE user_id = 1 AND night = 'furnished'").get().id;
+  const vote = (key) => post('/api/votes', key, { contestantId: ana, night: 'furnished' });
+  assert.equal((await (await vote('rui-key')).json()).pending, true);
+  assert.equal(await errOf(await vote('ivo-key')), 'err_duo_already_voted');
+  assert.equal(await errOf(await post('/api/votes/confirm', 'rui-key', { night: 'furnished' })), 'err_partner_must_confirm');
+  assert.equal((await post('/api/votes/confirm', 'ivo-key', { night: 'furnished' })).status, 200);
+  assert.equal(await errOf(await send('DELETE', '/api/votes/pending', 'ivo-key', { night: 'furnished' })), 'err_already_voted');
+  assert.equal(testDb.prepare("SELECT COUNT(*) n FROM votes WHERE confirmed_at IS NOT NULL").get().n, 2);
+  setStatus('furnished', 'closed');
+  assert.equal(await errOf(await post('/api/votes/confirm', 'ivo-key', { night: 'furnished' })), 'err_voting_not_open');
+});
+test('plaza chat: lowercase, empty and long refused, stable pseudonym, only the last 15 kept', async () => {
+  assert.equal(await errOf(await post('/api/chat/messages', 'ana-key', { text: '   ' })), 'err_empty_message');
+  assert.equal(await errOf(await post('/api/chat/messages', 'ana-key', { text: 'x'.repeat(301) })), 'err_message_too_long');
+  assert.equal((await post('/api/chat/messages', 'ana-key', { text: 'Hello   THERE' })).status, 201);
+  assert.equal(testDb.prepare('SELECT text FROM messages').get().text, 'hello there');
+  for (let i = 0; i < 17; i++) await post('/api/chat/messages', 'ana-key', { text: `m${i}` });
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM messages').get().n, 15);
+  assert.equal(testDb.prepare('SELECT COUNT(DISTINCT pseudonym) n FROM messages').get().n, 1);
+  assert.equal(testDb.prepare('SELECT COUNT(*) n FROM wall_pseudonym_history WHERE user_id = 1').get().n, 1);
+});

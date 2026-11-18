@@ -3,6 +3,8 @@
 // /api/* reaches this file. Writes not ported yet answer 405.
 import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
+import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
+import { isNight, DEFAULT_NIGHT } from './nights.js';
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -296,6 +298,147 @@ writes['POST /api/admin/consequences/reveal'] = async (ctx) => {
   if (!pick) return json({ error: 'err_no_pending_consequences' }, 404);
   await ctx.env.DB.prepare(`UPDATE consequences SET status = 'used', revealed_at = ${now} WHERE id = ? AND status = 'pending'`).bind(pick.id).run();
   return json({ ok: true, revealed: pick });
+};
+
+
+// ---- Snatch (src/votes.js) and Plaza chat (src/chat.js) -------------------
+// Push and translations are not on the Worker yet.
+const setting = async (env, key, dflt = null) => {
+  const r = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first();
+  return r ? r.value : dflt;
+};
+const nightStatus = async (env, night) => {
+  const s = await setting(env, `voting_status_${night}`, 'closed');
+  return s === 'registration' || s === 'open' ? s : 'closed';
+};
+const nightOf = (body) => (isNight(body?.night) ? body.night : DEFAULT_NIGHT);
+const err = (error) => json({ error }, 400);
+const MAX_PHOTO_BYTES = 400 * 1024;
+// Same rules as decodeJpegDataUrl() in src/photos.js, without Buffer.
+function decodePhoto(data) {
+  const prefix = 'data:image/jpeg;base64,';
+  if (typeof data !== 'string' || !data.startsWith(prefix)) return { error: 'err_photo_invalid' };
+  let bytes;
+  try { bytes = Uint8Array.from(atob(data.slice(prefix.length)), (c) => c.charCodeAt(0)); } catch { return { error: 'err_photo_invalid' }; }
+  if (bytes.length < 2 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return { error: 'err_photo_invalid' };
+  if (bytes.length > MAX_PHOTO_BYTES) return { error: 'err_photo_too_large' };
+  return { bytes, mime: 'image/jpeg' };
+}
+const entryOf = (env, userId, night, cols) => env.DB.prepare(
+  `SELECT ${cols} FROM contestants WHERE night = ? AND (user_id = ? OR partner_user_id = ?)`).bind(night, userId, userId).first();
+
+// The single vote row that belongs to this user tonight (their own, or the one shared with a duo partner).
+async function voteRowFor(env, userId, night) {
+  const e = await entryOf(env, userId, night, 'user_id, partner_user_id');
+  const partnerId = e ? (e.user_id === userId ? e.partner_user_id : e.user_id) : null;
+  const round = Number(await setting(env, `runoff_round_${night}`, 0)) || 0;
+  const row = await env.DB.prepare(
+    'SELECT id, user_id, contestant_id, confirmed_at FROM votes WHERE night = ? AND round = ? AND user_id IN (?, ?)')
+    .bind(night, round, userId, partnerId ?? userId).first();
+  return { row, partnerId, round };
+}
+
+writes['POST /api/outfit/register'] = async (ctx) => {
+  const { env, user, body } = ctx;
+  const night = nightOf(body);
+  if ((await nightStatus(env, night)) !== 'registration') return err('err_registration_not_open');
+  if (await entryOf(env, user.id, night, 'id')) return err('err_you_already_registered');
+  const name = String(body.name || '').trim();
+  if (!name) return err('err_persona_name_required');
+  if (name.length > 60) return err('err_max_60_chars');
+  if (!body.photoBase64) return err('err_photo_required');
+  const photo = decodePhoto(body.photoBase64);
+  if (photo.error) return err(photo.error);
+  let partnerId = null;
+  if (body.partnerUserId) {
+    partnerId = Number(body.partnerUserId);
+    if (partnerId === user.id) return err('err_cannot_partner_with_self');
+    if (!(await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(partnerId).first())) return err('err_user_invalid');
+    if (await entryOf(env, partnerId, night, 'id')) return err('err_already_registered_this_night');
+  }
+  const pending = !!partnerId;
+  const row = await env.DB.prepare(
+    `INSERT INTO contestants (name, night, user_id, partner_user_id, photo, photo_mime, confirmed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ${pending ? 'NULL' : "datetime('now')"}) RETURNING id`)
+    .bind(name, night, user.id, partnerId, photo.bytes, photo.mime).first();
+  return json({ ok: true, id: row.id, name, pending }, 201);
+};
+writes['POST /api/outfit/register/confirm'] = async (ctx) => {
+  const night = nightOf(ctx.body);
+  if ((await nightStatus(ctx.env, night)) !== 'registration') return err('err_registration_not_open');
+  const row = await entryOf(ctx.env, ctx.user.id, night, 'id, user_id, confirmed_at');
+  if (!row) return err('err_no_pending_entry');
+  if (row.confirmed_at) return err('err_you_already_registered');
+  if (row.user_id === ctx.user.id) return err('err_partner_must_confirm_entry');
+  await ctx.env.DB.prepare("UPDATE contestants SET confirmed_at = datetime('now') WHERE id = ? AND confirmed_at IS NULL").bind(row.id).run();
+  return json({ ok: true });
+};
+writes['DELETE /api/outfit/register/pending'] = async (ctx) => {
+  const night = nightOf(ctx.body);
+  if ((await nightStatus(ctx.env, night)) !== 'registration') return err('err_registration_not_open');
+  const row = await entryOf(ctx.env, ctx.user.id, night, 'id, confirmed_at');
+  if (!row) return err('err_no_pending_entry');
+  if (row.confirmed_at) return err('err_you_already_registered');
+  await ctx.env.DB.prepare('DELETE FROM contestants WHERE id = ?').bind(row.id).run();
+  return json({ ok: true });
+};
+writes['POST /api/votes'] = async (ctx) => {
+  const { env, user, body } = ctx;
+  const contestantId = Number(body.contestantId);
+  if (!contestantId) return err('err_choose_contestant');
+  if (!isNight(body.night)) return err('err_invalid_night');
+  const night = body.night;
+  if ((await nightStatus(env, night)) !== 'open') return err('err_voting_not_open');
+  if (!(await env.DB.prepare('SELECT id FROM contestants WHERE id = ? AND night = ?').bind(contestantId, night).first())) return err('err_contestant_invalid_for_night');
+  const raw = await setting(env, `runoff_ids_${night}`);
+  if (raw && !JSON.parse(raw).includes(contestantId)) return err('err_not_in_runoff');
+  const own = await entryOf(env, user.id, night, 'id');
+  if (own && own.id === contestantId) return err('err_cannot_vote_self');
+  const { row, partnerId, round } = await voteRowFor(env, user.id, night);
+  if (row) return err(partnerId ? 'err_duo_already_voted' : 'err_already_voted');
+  await env.DB.prepare(`INSERT INTO votes (user_id, contestant_id, night, round, confirmed_at) VALUES (?, ?, ?, ?, ${partnerId ? 'NULL' : "datetime('now')"})`)
+    .bind(user.id, contestantId, night, round).run();
+  return json({ ok: true, pending: !!partnerId }, 201);
+};
+writes['POST /api/votes/confirm'] = async (ctx) => {
+  if (!isNight(ctx.body.night)) return err('err_invalid_night');
+  if ((await nightStatus(ctx.env, ctx.body.night)) !== 'open') return err('err_voting_not_open');
+  const { row, partnerId } = await voteRowFor(ctx.env, ctx.user.id, ctx.body.night);
+  if (!partnerId) return err('err_not_a_duo');
+  if (!row) return err('err_no_pending_vote');
+  if (row.confirmed_at) return err('err_already_voted');
+  if (row.user_id === ctx.user.id) return err('err_partner_must_confirm');
+  await ctx.env.DB.prepare("UPDATE votes SET confirmed_at = datetime('now') WHERE id = ? AND confirmed_at IS NULL").bind(row.id).run();
+  return json({ ok: true });
+};
+writes['DELETE /api/votes/pending'] = async (ctx) => {
+  if (!isNight(ctx.body.night)) return err('err_invalid_night');
+  if ((await nightStatus(ctx.env, ctx.body.night)) !== 'open') return err('err_voting_not_open');
+  const { row, partnerId } = await voteRowFor(ctx.env, ctx.user.id, ctx.body.night);
+  if (!partnerId) return err('err_not_a_duo');
+  if (!row) return err('err_no_pending_vote');
+  if (row.confirmed_at) return err('err_already_voted');
+  await ctx.env.DB.prepare('DELETE FROM votes WHERE id = ? AND confirmed_at IS NULL').bind(row.id).run();
+  return json({ ok: true });
+};
+
+const pick = (list) => list[crypto.getRandomValues(new Uint32Array(1))[0] % list.length];
+writes['POST /api/chat/messages'] = async (ctx) => {
+  const { DB } = ctx.env;
+  const text = String(ctx.body.text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text) return err('err_empty_message');
+  if (text.length > 300) return err('err_message_too_long');
+  let { wall_pseudonym: pseudonym } = await DB.prepare('SELECT wall_pseudonym FROM users WHERE id = ?').bind(ctx.user.id).first();
+  if (!pseudonym) {
+    pseudonym = `${pick(FURNISHED_OBJECTS)}${pick(SWAMP_BEINGS)}`;
+    await DB.batch([
+      DB.prepare('UPDATE users SET wall_pseudonym = ? WHERE id = ?').bind(pseudonym, ctx.user.id),
+      DB.prepare('INSERT INTO wall_pseudonym_history (user_id, pseudonym) VALUES (?, ?)').bind(ctx.user.id, pseudonym),
+    ]);
+  }
+  await DB.prepare('INSERT INTO messages (user_id, text, pseudonym) VALUES (?, ?, ?)').bind(ctx.user.id, text, pseudonym).run();
+  await DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 15)').run();
+  return json({ ok: true }, 201);
 };
 
 const PUBLIC = new Set(['/api/version', 'POST /api/auth/login']);
