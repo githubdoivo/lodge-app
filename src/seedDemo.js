@@ -92,6 +92,7 @@ function loadGuestNames() {
 }
 
 const NAMES = loadGuestNames();
+export const DEMO_NAMES = NAMES;
 
 // The one demo user pre-promoted to admin on every fresh seed, so there's
 // always a stable non-owner admin tester available without manually
