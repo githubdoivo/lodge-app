@@ -464,3 +464,24 @@ test('wipes: only the owner; each clears its own data and translations; voting r
   assert.equal((await (await w('/api/admin/users/wipe', 's.own')).json()).removed, 2);
   assert.deepEqual(db.prepare('SELECT name FROM users').all().map((u) => u.name), ['Ivo']);
 });
+
+test('daily demo reset: clears what visitors made, files included, and seeds the same people again', async () => {
+  const { resetDemo } = await import('../src/worker.js');
+  const db = new DatabaseSync(':memory:');
+  db.exec('PRAGMA foreign_keys = ON');
+  db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  db.prepare("INSERT INTO users (name, token_hash, token_enc, is_owner, is_admin) VALUES ('Ivo', 'h', 'x', 1, 1)").run();
+  db.prepare("INSERT INTO users (name, token_hash, token_enc) VALUES ('Visitor', 'h2', 'x')").run();
+  db.prepare("INSERT INTO plaza_posts (type, author_id, text) VALUES ('announcement', 2, 'spam')").run();
+  let deleted = [];
+  const FILES = { list: async () => ({ objects: [{ key: 'a' }, { key: 'b' }], truncated: false }), delete: async (k) => { deleted = k; } };
+  const e = { DB: d1(db), FILES, APP_ENV: 'demo', TOKEN_SECRET: SECRET };
+  const out = await resetDemo(e);
+  assert.equal(out.files, 2);
+  assert.deepEqual(deleted, ['a', 'b']);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM plaza_posts').get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM users WHERE name = 'Visitor'").get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM users WHERE is_owner = 0').get().n, MOCK_NAMES.length);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM users WHERE is_owner = 1').get().n, 1);
+  assert.deepEqual(await resetDemo({ ...e, APP_ENV: 'prod' }), { skipped: true });
+});

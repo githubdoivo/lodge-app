@@ -684,7 +684,31 @@ const getDyn = [];
 const writeDyn = [];
 addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
 
+// Daily reset (cron trigger): the demo goes back to its starting state. People and
+// everything they wrote go (ON DELETE CASCADE), then the shared tables and the
+// uploaded files are cleared and the demo people are seeded again with the same keys.
+const RESET_TABLES = ['consequences', 'contestants', 'dedications', 'memo_recaps', 'memo_slots', 'memo_uploads', 'messages',
+  'plaza_posts', 'push_subscriptions', 'sessions', 'passkey_challenges', 'translations', 'votes', 'congeniality_votes', 'wall_pseudonym_history'];
+export async function resetDemo(env) {
+  if (env.APP_ENV !== 'demo') return { skipped: true };
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM users WHERE is_owner = 0'),
+    ...RESET_TABLES.map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
+    env.DB.prepare("DELETE FROM settings WHERE key NOT LIKE 'owner%'"),
+  ]);
+  let cursor, files = 0;
+  do {
+    const page = await env.FILES.list({ cursor, limit: 500 });
+    if (page.objects.length) { await env.FILES.delete(page.objects.map((o) => o.key)); files += page.objects.length; }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  resetDemoSeedFlag();
+  await ensureDemoUsers(env);
+  return { ok: true, files };
+}
+
 export default {
+  async scheduled(event, env, ctx) { ctx.waitUntil(resetDemo(env)); },
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
