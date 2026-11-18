@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NIGHTS } from './nights.js';
 import { hashToken, encryptToken, decryptToken } from './tokens.js';
+import { tokenBase, generateDemoUserToken } from './demoUsers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -419,13 +420,6 @@ if (!columnExists('users', 'logo_customized')) {
   db.exec('ALTER TABLE users ADD COLUMN logo_customized INTEGER NOT NULL DEFAULT 0');
 }
 
-/** Strips a name down to the plain-ASCII, lowercase base used by every token. */
-function tokenBase(name) {
-  return String(name)
-    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '') || 'user';
-}
 
 /**
  * Generates a memorable per-user token: their name plus a random 6-digit
@@ -636,20 +630,9 @@ export function generateUserToken(name) {
   return token;
 }
 
-/**
- * Deterministic variant for QA's demo-seed template (see seedDemo.js): the
- * same name always produces the same token across every reseed, since QA's
- * database resets on every deploy. Without this, a tester's access key
- * would change on every single deploy, forcing a re-send every time -
- * whereas prod's real users don't need this, their DB persists.
- */
-export function generateDemoUserToken(name) {
-  const base = tokenBase(name);
-  let hash = 0;
-  for (const ch of base) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  const digits = String(hash % 10000).padStart(4, '0');
-  return `${base}${digits}`;
-}
+// Deterministic demo keys (same name, same key on every reseed) live in
+// src/demoUsers.js so the Cloudflare Worker can make them too.
+export { generateDemoUserToken };
 
 /** Reads a setting with a default value. */
 export function getSetting(key, fallback = null) {

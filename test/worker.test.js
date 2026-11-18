@@ -4,8 +4,9 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { createHmac } from 'node:crypto';
-import worker from '../src/worker.js';
+import { createHmac, createHash, createDecipheriv } from 'node:crypto';
+import worker, { resetDemoSeedFlag } from '../src/worker.js';
+import { generateDemoUserToken, MOCK_NAMES } from '../src/demoUsers.js';
 
 const SECRET = 'test-secret';
 const hash = (t) => createHmac('sha256', SECRET).update(t).digest('hex');
@@ -294,4 +295,46 @@ test('plaza chat: lowercase, empty and long refused, stable pseudonym, only the 
   assert.equal(testDb.prepare('SELECT COUNT(*) n FROM messages').get().n, 15);
   assert.equal(testDb.prepare('SELECT COUNT(DISTINCT pseudonym) n FROM messages').get().n, 1);
   assert.equal(testDb.prepare('SELECT COUNT(*) n FROM wall_pseudonym_history WHERE user_id = 1').get().n, 1);
+});
+
+// APP-LG-012: an empty demo D1 seeds its own people, so the demo keys sign in.
+function emptyEnv(appEnv = 'demo') {
+  const db = new DatabaseSync(':memory:');
+  db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  resetDemoSeedFlag();
+  return { db, env: { ...env, DB: d1(db), APP_ENV: appEnv } };
+}
+const login = (e, token) => worker.fetch(new Request('https://x.test/api/auth/login', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) }), e);
+test('demo: an empty D1 seeds the demo people and both login-screen keys sign in', async () => {
+  const { db, env: e } = emptyEnv();
+  const { keys } = await (await get('/api/demo', null, e)).json();
+  assert.deepEqual(keys.map((k) => k.role), ['guest', 'admin']);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM users').get().n, MOCK_NAMES.length);
+  const guest = await (await login(e, keys[0].key.toUpperCase())).json();
+  assert.deepEqual([guest.name, guest.isAdmin], ['Alice Moreira', false]);
+  const admin = await (await login(e, keys[1].key)).json();
+  assert.deepEqual([admin.name, admin.isAdmin], ['Elisa Carvalho', true]);
+  assert.equal((await login(e, 'alicemoreira0000')).status, 401);
+});
+test('demo: the stored key decrypts the same way the Node app does', async () => {
+  const { db, env: e } = emptyEnv();
+  await get('/api/demo', null, e);
+  const enc = db.prepare("SELECT token_enc FROM users WHERE name = 'Carla Mendes'").get().token_enc;
+  const [iv, tag, ct] = enc.split(':').map((x) => Buffer.from(x, 'base64'));
+  const d = createDecipheriv('aes-256-gcm', createHash('sha256').update(SECRET).digest(), iv);
+  d.setAuthTag(tag);
+  assert.equal(Buffer.concat([d.update(ct), d.final()]).toString(), generateDemoUserToken('Carla Mendes'));
+});
+test('demo: seeding never doubles up, even after a restart or many requests at once', async () => {
+  const { db, env: e } = emptyEnv();
+  await Promise.all([1, 2, 3].map(() => get('/api/demo', null, e)));
+  resetDemoSeedFlag();
+  await get('/api/demo', null, e);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM users').get().n, MOCK_NAMES.length);
+});
+test('off the demo: nothing is seeded and no keys are offered', async () => {
+  const { db, env: e } = emptyEnv('production');
+  assert.deepEqual((await (await get('/api/demo', null, e)).json()).keys, []);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM users').get().n, 0);
 });

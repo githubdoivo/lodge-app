@@ -5,7 +5,8 @@
 // that's still true in production (SEED_DEMO is never set there). QA is the
 // one exception: 5 contestants per night are seeded automatically from the
 // demo user template, so Snatch is testable without manual setup.
-import db, { generateDemoUserToken, generateUserToken } from './db.js';
+import db, { generateUserToken } from './db.js';
+import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken } from './demoUsers.js';
 import { hashToken, encryptToken } from './tokens.js';
 import { today } from './time.js';
 import { NIGHTS } from './nights.js';
@@ -73,14 +74,7 @@ function crc32(buf) {
 // Never include the owner's own name in either list - a demo account sharing
 // the owner's name shows up in the unclaimed-user search, which is
 // confusing/alarming even though it's just a regular user under the hood.
-const MOCK_NAMES = [
-  'Alice Moreira', 'Bruno Teixeira', 'Carla Mendes', 'Daniel Sousa',
-  'Elisa Carvalho', 'Fábio Nunes', 'Gabriela Pinto', 'Hugo Ribeiro',
-  'Joana Correia', 'Leonor Matos', 'Manuel Antunes', 'Marta Freitas',
-  'Nádia Barros', 'Óscar Lima', 'Paula Neves',
-  'Tiago Fonseca', 'Sofia Gaspar', 'Vasco Dias', 'Vera Lobo',
-  'Xavier Salgado', 'Zé Monteiro', 'Inácio Pires', 'Simão Valente',
-];
+// MOCK_NAMES lives in src/demoUsers.js (shared with the Worker).
 
 const GUEST_LIST_FILE = join(dirname(MEMO_DIR), 'guest-list.txt');
 
@@ -94,13 +88,7 @@ function loadGuestNames() {
 const NAMES = loadGuestNames();
 export const DEMO_NAMES = NAMES;
 
-// The one demo user pre-promoted to admin on every fresh seed, so there's
-// always a stable non-owner admin tester available without manually
-// promoting someone after each QA reseed. Only applies to the mock list.
-export const PRESET_ADMIN_NAME = 'Elisa Carvalho';
-
-// The guest the public demo's login screen offers (see src/demo.js).
-export const DEMO_GUEST_NAME = 'Alice Moreira';
+export { PRESET_ADMIN_NAME, DEMO_GUEST_NAME };
 
 // The rata is a passable, anonymous token - whoever ends up holding it when
 // a consequence is revealed might not be near anyone else at that moment.

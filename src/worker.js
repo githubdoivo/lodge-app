@@ -5,6 +5,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT } from './nights.js';
+import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken } from './demoUsers.js';
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -14,6 +15,39 @@ async function hashToken(secret, token) {
   const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(String(token)));
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+// Same format as encryptToken() in src/tokens.js (AES-256-GCM, key = sha256(secret),
+// iv:tag:ciphertext in base64), so the Node app can read keys the Worker writes.
+async function encryptToken(secret, token) {
+  const raw = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+  const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const out = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(String(token))));
+  const b64 = (u8) => btoa(String.fromCharCode(...u8));
+  return `${b64(iv)}:${b64(out.slice(-16))}:${b64(out.slice(0, -16))}`;
+}
+
+// Demo only: an empty D1 gets the demo people (same names and keys as the Fly
+// demo, src/seedDemo.js), so nobody has to run a D1 command. Each insert skips
+// a name already there, so two first requests at once can't double anyone up.
+let demoSeeded = false;
+export async function ensureDemoUsers(env) {
+  if (demoSeeded || env.APP_ENV !== 'demo' || !env.TOKEN_SECRET) return;
+  const { n } = await env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE is_owner = 0').first();
+  if (n === 0) {
+    const stmts = [];
+    for (const name of MOCK_NAMES) {
+      const key = generateDemoUserToken(name);
+      stmts.push(env.DB.prepare(
+        `INSERT INTO users (name, token_hash, token_enc, is_admin, updated_at)
+         SELECT ?, ?, ?, ?, ${now} WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = ?)`)
+        .bind(name, await hashToken(env.TOKEN_SECRET, key), await encryptToken(env.TOKEN_SECRET, key), name === PRESET_ADMIN_NAME ? 1 : 0, name));
+    }
+    await env.DB.batch(stmts);
+  }
+  demoSeeded = true;
+}
+export const resetDemoSeedFlag = () => { demoSeeded = false; };
 
 const USER_COLUMNS = 'id, name, is_admin, is_owner, tutorial_seen, lang, key_claimed_at, logo_customized';
 
@@ -88,6 +122,11 @@ const REVEALED = `
 
 const routes = {
   '/api/version': async (ctx) => json({ version: pkg.version, env: ctx.env.APP_ENV || null, runtime: 'worker' }),
+  // The shared logins the demo's sign-in screen offers (src/demo.js demoKeys()).
+  '/api/demo': async (ctx) => json({ keys: ctx.env.APP_ENV !== 'demo' ? [] : [
+    { role: 'guest', name: DEMO_GUEST_NAME, key: generateDemoUserToken(DEMO_GUEST_NAME) },
+    { role: 'admin', name: PRESET_ADMIN_NAME, key: generateDemoUserToken(PRESET_ADMIN_NAME) },
+  ] }),
   '/api/me': async (ctx) => json({
     ...ctx.user,
     plazaEnabled: ctx.env.ENABLE_PLAZA === 'true',
@@ -441,7 +480,7 @@ writes['POST /api/chat/messages'] = async (ctx) => {
   return json({ ok: true }, 201);
 };
 
-const PUBLIC = new Set(['/api/version', 'POST /api/auth/login']);
+const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login']);
 
 export default {
   async fetch(request, env) {
@@ -461,6 +500,7 @@ export default {
       ctx.body = await readBody(request);
     }
     if (!handler) return json({ error: 'err_not_found' }, 404);
+    await ensureDemoUsers(env);
     if (!PUBLIC.has(key)) {
       const auth = await authenticate(request, env, url);
       if (auth.error) return auth.error;
