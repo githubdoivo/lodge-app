@@ -1,7 +1,7 @@
 // Re-hashes the demo keys in D1 lodge-demo with the Worker's own TOKEN_SECRET,
 // so the same demo keys as on Fly sign in on the Worker.
-// One command, run by Ivo from the lodge-app folder:
-//   node scripts/d1-demo-keys.mjs --apply
+// One command, works from any folder:
+//   node ~/projects/lodge-app/scripts/d1-demo-keys.mjs --apply
 // The secret comes from the Keychain (service lodge-demo-token-secret); it is
 // never typed or printed. Without --apply it only prints the SQL.
 import { createHmac } from 'node:crypto';
@@ -29,7 +29,11 @@ const dir = mkdtempSync(join(tmpdir(), 'd1-demo-keys-'));
 const file = join(dir, 'keys.sql');
 try {
   writeFileSync(file, sql);
-  execFileSync('npx', ['wrangler', 'd1', 'execute', 'lodge-demo', '--remote', '--file', file], { stdio: 'inherit' });
+  execFileSync('npx', ['wrangler', 'd1', 'execute', 'lodge-demo', '--remote', '--file', file], {
+    stdio: 'inherit',
+    // run wrangler from the project root so it finds wrangler config, whatever folder this was started from
+    cwd: new URL('..', import.meta.url).pathname,
+  });
   console.log(`done: ${DEMO_NAMES.length} demo keys re-hashed in lodge-demo`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
