@@ -51,7 +51,7 @@ function available(env, user, day) {
 }
 
 /** Today's shared random slots, made the first time anyone asks (same rules as ensureTodaysSlots). */
-async function ensureSlots(env, day) {
+export async function ensureSlots(env, day) {
   const { n } = await env.DB.prepare('SELECT COUNT(*) AS n FROM memo_slots WHERE day = ?').bind(day).first();
   if (n > 0) return;
   const windowStart = zonedToUtc(day, WINDOW_START_HOUR, 0).getTime();
@@ -125,6 +125,29 @@ const fileFrom = async (request, kindOk) => {
   if (file.size > MAX_FILE_BYTES) return { error: 'err_memo_file_too_large' };
   return { file };
 };
+
+// Demo button: two photo moments from four people, so the shared feed has something (mirrors seedDemoMemo).
+export async function seedDemoMemo(env) {
+  const day = await todayOf(env);
+  const { n } = await env.DB.prepare('SELECT COUNT(*) AS n FROM memo_uploads').first();
+  const { results: users } = await env.DB.prepare('SELECT id FROM users WHERE is_owner = 0 ORDER BY id LIMIT 4').all();
+  if (n > 0 || !users.length) return;
+  await ensureSlots(env, day);
+  const { results: slots } = await env.DB.prepare('SELECT id FROM memo_slots WHERE day = ? ORDER BY scheduled_at LIMIT 2').bind(day).all();
+  if (!slots.length) return;
+  await env.DB.batch(slots.map((s) => env.DB.prepare("UPDATE memo_slots SET notified_at = strftime('%Y-%m-%d %H:%M:%f','now') WHERE id = ?").bind(s.id)));
+  const ph = await env.ASSETS.fetch(new Request('https://x/images/demo-photo.jpg'));
+  const buf = await ph.arrayBuffer();
+  const stmts = [];
+  for (const [i, slot] of slots.entries()) for (const j of [0, 1]) {
+    const u = users[(i * 2 + j) % users.length];
+    const key = `${day}/${u.id}-slot${slot.id}.jpg`;
+    await env.FILES.put(key, buf, { httpMetadata: { contentType: 'image/jpeg' } });
+    stmts.push(env.DB.prepare('INSERT OR IGNORE INTO memo_uploads (slot_id, user_id, day, kind, mime_type, file_path, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(slot.id, u.id, day, 'photo', 'image/jpeg', key, buf.byteLength));
+  }
+  await env.DB.batch(stmts);
+}
 
 export function addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly, now }) {
   const off = (ctx, day) => (available(ctx.env, ctx.user, day) ? null : json({ error: 'err_not_found' }, 404));

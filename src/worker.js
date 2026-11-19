@@ -5,7 +5,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
-import { addMemoRoutes } from './workerMemo.js';
+import { addMemoRoutes, seedDemoMemo } from './workerMemo.js';
 import { addVotesRoutes, ensureVoteRounds } from './workerVotes.js';
 import { addPlazaRoutes } from './workerPlaza.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
@@ -74,8 +74,10 @@ export async function seedDemoContent(env) {
   // Whoever claims this row seeds; a request racing in at the same moment gets 0 changes and skips.
   const claim = await DB.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('demo_content_seeded', '1')`).run();
   if (!claim.meta?.changes) return;
-  const day = await votingDay(env);
-  const uid = (name) => '(SELECT id FROM users WHERE name = ?)';
+  await env.DB.batch([...wallStmts(env.DB), ...(await consequenceStmts(env)), ...contestantStmts(env.DB)]);
+}
+const uid = () => '(SELECT id FROM users WHERE name = ?)';
+function wallStmts(DB) {
   const author = MOCK_NAMES[0];
   const stmts = [];
   const post = (type, text) => DB.prepare(`INSERT INTO plaza_posts (type, author_id, text) VALUES (?, ${uid()}, ?)`).bind(type, author, text);
@@ -87,15 +89,32 @@ export async function seedDemoContent(env) {
   stmts.push(post('links', 'useful links 🔗'));
   SAMPLE_LINKS.forEach(([emoji, label, url], i) =>
     stmts.push(DB.prepare(`INSERT INTO plaza_link_items (post_id, emoji, label, url, position) VALUES (${last}, ?, ?, ?, ?)`).bind(emoji, label, url, i)));
+  return stmts;
+}
+async function consequenceStmts(env) {
+  const DB = env.DB; const day = await votingDay(env); const stmts = [];
   stmts.push(DB.prepare(`INSERT INTO consequences (user_id, text, day, status, revealed_at) VALUES (${uid()}, ?, ?, 'used', ${now})`)
     .bind(MOCK_NAMES[0], 'Act like a rat for 5 minutes.', day));
   SAMPLE_CONSEQUENCES.forEach((text, i) =>
     stmts.push(DB.prepare(`INSERT INTO consequences (user_id, text, day) VALUES (${uid()}, ?, ?)`).bind(MOCK_NAMES[(i + 1) % MOCK_NAMES.length], text, day)));
+  return stmts;
+}
+function contestantStmts(DB) {
+  const stmts = [];
   NIGHTS.forEach((night, i) => SAMPLE_PERSONAS[night].forEach((persona, j) =>
     stmts.push(DB.prepare(`INSERT INTO contestants (name, night, user_id, photo, photo_mime, confirmed_at) VALUES (?, ?, ${uid()}, ?, 'image/png', datetime('now'))`)
       .bind(persona, night, MOCK_NAMES[i * 5 + j], SAMPLE_PNG))));
-  await DB.batch(stmts);
+  return stmts;
 }
+
+// Owner's sample buttons (demo only, like the demo reset): add sample content on top of what is there.
+const demoOnly = (ctx) => (ctx.env.APP_ENV !== 'demo' ? json({ error: 'err_demo_disabled' }, 403) : null);
+const seedRoute = (build) => async (ctx) => {
+  const off = ownerOnly(ctx) || demoOnly(ctx); if (off) return off;
+  const stmts = await build(ctx.env);
+  if (stmts.length) await ctx.env.DB.batch(stmts);
+  return json({ ok: true });
+};
 export const resetDemoSeedFlag = () => { demoSeeded = false; };
 
 const USER_COLUMNS = 'id, name, is_admin, is_owner, tutorial_seen, lang, key_claimed_at, logo_customized';
@@ -808,6 +827,39 @@ writes['POST /api/admin/plaza-posts/wipe'] = ownerWipe((DB) => [
   DB.prepare('DELETE FROM plaza_posts'), ...wipeTranslations(DB, ['plaza_post', 'poll_option', 'link_item'])]);
 writes['POST /api/admin/chat/wipe'] = ownerWipe((DB) => [
   DB.prepare('DELETE FROM messages'), ...wipeTranslations(DB, ['message'])]);
+
+const addSeedRoutes = () => {
+writes['POST /api/admin/plaza-posts/seed-demo'] = seedRoute((env) => wallStmts(env.DB));
+writes['POST /api/admin/consequences/seed-demo'] = seedRoute((env) => consequenceStmts(env));
+writes['POST /api/admin/contestants/seed-demo'] = seedRoute((env) => contestantStmts(env.DB));
+writes['POST /api/admin/memo/seed-demo'] = async (ctx) => {
+  const off = ownerOnly(ctx) || demoOnly(ctx); if (off) return off;
+  await seedDemoMemo(ctx.env);
+  return json({ ok: true });
+};
+writes['POST /api/admin/chat/seed-demo'] = async (ctx) => {
+  const off = ownerOnly(ctx) || demoOnly(ctx); if (off) return off;
+  const { n } = await ctx.env.DB.prepare('SELECT COUNT(*) AS n FROM messages').first();
+  if (n > 0) return json({ ok: true });
+  const { results: users } = await ctx.env.DB.prepare('SELECT id, wall_pseudonym FROM users WHERE is_owner = 0 ORDER BY id LIMIT 4').all();
+  const lines = ['quem trouxe o gelo?', 'a playlist está a carregar demasiado nos anos 2000 e ninguém se queixa',
+    'alguém viu um casaco preto com um bolso rasgado?', 'confirmo que a sobremesa vale a pena esperar'];
+  const stmts = [];
+  for (const [i, text] of lines.entries()) {
+    const u = users[i % users.length]; if (!u) break;
+    const name = u.wall_pseudonym || `${pick(FURNISHED_OBJECTS)}${pick(SWAMP_BEINGS)}`;
+    if (!u.wall_pseudonym) {
+      u.wall_pseudonym = name;
+      stmts.push(ctx.env.DB.prepare('UPDATE users SET wall_pseudonym = ? WHERE id = ?').bind(name, u.id),
+        ctx.env.DB.prepare('INSERT INTO wall_pseudonym_history (user_id, pseudonym) VALUES (?, ?)').bind(u.id, name));
+    }
+    stmts.push(ctx.env.DB.prepare('INSERT INTO messages (user_id, text, pseudonym) VALUES (?, ?, ?)').bind(u.id, text, name));
+  }
+  if (stmts.length) await ctx.env.DB.batch(stmts);
+  return json({ ok: true });
+};
+};
+addSeedRoutes();
 
 const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login', '/api/auth/unclaimed-users', 'POST /api/auth/claim-key']);
 

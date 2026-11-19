@@ -253,6 +253,23 @@ export function addVotesRoutes({ routes, writes, getDyn, writeDyn, json, adminOn
   const url = (night) => `/?tab=outfit&night=${encodeURIComponent(night)}`;
   const tell = (ctx, tag, pt, en) => ctx.exec.waitUntil(broadcast(ctx.env, { title: { pt: 'snatch', en: 'snatch' }, body: { pt, en }, tag, url: url(ctx.night) }));
 
+  // Owner sees who voted for whom; an admin only the tally (same as the Node route).
+  routes['/api/admin/votes'] = async (ctx) => {
+    const off = adminOnly(ctx); if (off) return off;
+    const night = nightOf(ctx.url.searchParams.get('night'));
+    const results = await resultsForNight(ctx.env, night);
+    if (!ctx.user.is_owner) return json({ night, results });
+    const { results: votes } = await ctx.env.DB.prepare(`
+      SELECT v.id, v.night, u.name AS voter, c.name AS contestant, v.created_at, v.confirmed_at IS NOT NULL AS confirmed
+      FROM votes v JOIN users u ON u.id = v.user_id JOIN contestants c ON c.id = v.contestant_id
+      WHERE v.night = ? ORDER BY v.created_at`).bind(night).all();
+    const { results: congenialityVotes } = await ctx.env.DB.prepare(`
+      SELECT cv.id, u.name AS voter, t.name AS target, cv.created_at
+      FROM congeniality_votes cv JOIN users u ON u.id = cv.user_id JOIN users t ON t.id = cv.target_user_id
+      WHERE cv.night = ? ORDER BY cv.created_at`).bind(night).all();
+    return json({ night, votes: votes.map((v) => ({ ...v, confirmed: !!v.confirmed })), congenialityVotes, results });
+  };
+
   routes['/api/votes/status'] = async (ctx) => {
     const { env, user } = ctx;
     const night = nightOf(ctx.url.searchParams.get('night'));
