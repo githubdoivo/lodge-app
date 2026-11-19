@@ -12,6 +12,7 @@ import { randomBytes, createHash, webcrypto } from 'node:crypto';
 import db from './db.js';
 import { hashToken } from './tokens.js';
 import { isFaceIdTryout } from './demo.js';
+import { cbor, coseToJwk, derToRaw } from './webauthn.js';   // shared with the Worker (APP-LG-024)
 
 const { subtle } = webcrypto;
 const CHALLENGE_MS = 5 * 60 * 1000;
@@ -25,37 +26,6 @@ export function passkeyRequired(user) {
   if (process.env.DEMO_MODE === 'true') return !!user && isFaceIdTryout(user.id);
   if (process.env.ADMIN_PASSKEY === 'off') return false;
   return !!(user && (user.is_admin || user.is_owner || user.isAdmin || user.isOwner));
-}
-
-// Just enough CBOR for attestation objects and COSE keys: returns [value, nextPos].
-function cbor(bytes, pos = 0) {
-  const b = bytes[pos++], major = b >> 5, info = b & 31;
-  let len = info;
-  if (info === 24) len = bytes[pos++];
-  else if (info === 25) { len = (bytes[pos] << 8) | bytes[pos + 1]; pos += 2; }
-  else if (info === 26) { len = ((bytes[pos] << 24) >>> 0) + (bytes[pos + 1] << 16) + (bytes[pos + 2] << 8) + bytes[pos + 3]; pos += 4; }
-  else if (info > 26) throw new Error('cbor');
-  if (major === 0) return [len, pos];
-  if (major === 1) return [-1 - len, pos];
-  if (major === 2) return [bytes.slice(pos, pos + len), pos + len];
-  if (major === 3) return [new TextDecoder().decode(bytes.slice(pos, pos + len)), pos + len];
-  if (major === 4) { const a = []; for (let i = 0; i < len; i++) { let v; [v, pos] = cbor(bytes, pos); a.push(v); } return [a, pos]; }
-  if (major === 5) { const m = new Map(); for (let i = 0; i < len; i++) { let k, v; [k, pos] = cbor(bytes, pos); [v, pos] = cbor(bytes, pos); m.set(k, v); } return [m, pos]; }
-  if (major === 7) return [info === 21 ? true : info === 20 ? false : null, pos];
-  throw new Error('cbor');
-}
-
-function coseToJwk(m) {
-  if (m.get(1) === 2 && m.get(3) === -7) return { alg: -7, jwk: { kty: 'EC', crv: 'P-256', x: b64u(m.get(-2)), y: b64u(m.get(-3)), ext: true } };
-  if (m.get(1) === 3 && m.get(3) === -257) return { alg: -257, jwk: { kty: 'RSA', n: b64u(m.get(-1)), e: b64u(m.get(-2)), alg: 'RS256', ext: true } };
-  throw new Error('unsupported_key');
-}
-
-// ECDSA signatures come DER-wrapped; WebCrypto wants r||s, 32 bytes each.
-function derToRaw(der) {
-  let p = 2; if (der[1] & 0x80) p += der[1] & 0x7f;
-  const part = () => { p++; const n = der[p++]; let v = der.slice(p, p + n); p += n; while (v.length > 32 && v[0] === 0) v = v.slice(1); const o = new Uint8Array(32); o.set(v, 32 - v.length); return o; };
-  const r = part(), s = part(), out = new Uint8Array(64); out.set(r); out.set(s, 32); return out;
 }
 
 /** Our site as the browser sees it: the host the request came to, and its origin. */

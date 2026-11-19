@@ -119,10 +119,16 @@ test('sign-in: right key in any case, wrong or empty key refused, broken body is
 });
 test('off the demo, an admin key alone needs Face ID; a session does not', async () => {
   const prod = { ...env, APP_ENV: undefined };
+  // The key is right, so sign-in answers with the Face ID step (as src/routes.js does), not a session.
   const r = await send('POST', '/api/auth/login', null, { token: 'rui-key' }, prod);
-  assert.equal(r.status, 401);
-  assert.equal((await r.json()).error, 'err_passkey_required');
-  assert.equal((await get('/api/me', 'rui-key', prod)).status, 401);
+  assert.equal(r.status, 200);
+  const step = await r.json();
+  assert.equal(step.step, 'passkey');
+  assert.equal(step.mode, 'create');
+  assert.equal(step.id, undefined);
+  const me = await get('/api/me', 'rui-key', prod);
+  assert.equal(me.status, 401);
+  assert.equal((await me.json()).error, 'err_passkey_required');
   assert.equal((await get('/api/me', 'ana-key', prod)).status, 200);
   assert.equal((await (await get('/api/me', 's.abc', prod)).json()).name, 'Ivo');
 });

@@ -7,6 +7,7 @@ import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
 import { addMemoRoutes } from './workerMemo.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
+import { addPasskeyRoutes, passkeyRequired } from './workerPasskeys.js';
 import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
 const json = (body, status = 200) =>
@@ -56,9 +57,8 @@ const USER_COLUMNS = 'id, name, is_admin, is_owner, tutorial_seen, lang, key_cla
 const now = "strftime('%Y-%m-%d %H:%M:%f', 'now')";
 const isSessionToken = (t) => String(t || '').startsWith('s.');
 
-// Owner and admins confirm with Face ID outside the demo (src/passkeys.js).
-// Face ID is not on the Worker yet, so off the demo their key alone opens nothing.
-const passkeyRequired = (env, user) => env.APP_ENV !== 'demo' && !!(user.is_admin || user.is_owner);
+// Owner and admins confirm with Face ID outside the demo: passkeyRequired() and
+// the passkey routes are in src/workerPasskeys.js (APP-LG-024).
 
 // Same as findUserByToken() in src/auth.js: a Face ID session (s.<hex>) or a key.
 async function findUser(env, token) {
@@ -168,8 +168,9 @@ const writes = {
     if (!ctx.env.TOKEN_SECRET) return json({ error: 'err_server' }, 500);
     const user = await findUser(ctx.env, token);
     if (!user) return json({ error: 'err_token_invalid' }, 401);
-    if (!user.viaPasskey && passkeyRequired(ctx.env, user)) return json({ error: 'err_passkey_required' }, 401);
     await stampClaimed(ctx.env, user.id);
+    // Owner and admins: the key alone opens nothing; Face ID confirms it (or is added now, once).
+    if (!user.viaPasskey && passkeyRequired(ctx.env, user)) return passkeys.loginStep(ctx, user);
     return json({ id: user.id, name: user.name, isAdmin: !!user.is_admin });
   },
   'POST /api/auth/logout': async (ctx) => {
@@ -703,6 +704,7 @@ const getDyn = [];
 const writeDyn = [];
 addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
 addPushRoutes({ routes, writes, json });
+const passkeys = addPasskeyRoutes({ routes, writes, writeDyn, publicKeys: PUBLIC, json, hashToken, findUser, ownerOnly });
 
 // Daily reset (cron trigger): the demo goes back to its starting state. People and
 // everything they wrote go (ON DELETE CASCADE), then the shared tables and the
