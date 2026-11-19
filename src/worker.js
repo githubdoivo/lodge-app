@@ -7,6 +7,7 @@ import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
 import { addMemoRoutes } from './workerMemo.js';
 import { addVotesRoutes, ensureVoteRounds } from './workerVotes.js';
+import { addPlazaRoutes } from './workerPlaza.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
 import { addPasskeyRoutes, passkeyRequired } from './workerPasskeys.js';
 import { clientIp, lockedFor, countFail, tooMany } from './workerRateLimit.js';
@@ -269,10 +270,11 @@ const writes = {
     const { type, text, options, links, photoBase64 } = ctx.body;
     const clean = validatePostContent(type, { text, options, links });
     if (clean.error) return json({ error: clean.error }, 400);
-    if (photoBase64) return json({ error: 'err_photo_not_yet' }, 400);
+    let photo = null;
+    if (photoBase64) { photo = decodePhoto(photoBase64); if (photo.error) return json({ error: photo.error }, 400); }
     const DB = ctx.env.DB;
-    const post = await DB.prepare('INSERT INTO plaza_posts (type, author_id, text) VALUES (?, ?, ?) RETURNING id')
-      .bind(type, ctx.user.id, clean.text).first();
+    const post = await DB.prepare('INSERT INTO plaza_posts (type, author_id, text, photo, photo_mime) VALUES (?, ?, ?, ?, ?) RETURNING id')
+      .bind(type, ctx.user.id, clean.text, photo ? photo.bytes : null, photo ? photo.mime : null).first();
     const extra = type === 'poll'
       ? clean.options.map((label, i) => DB.prepare('INSERT INTO plaza_poll_options (post_id, label, position) VALUES (?, ?, ?)').bind(post.id, label, i))
       : clean.links.map((l, i) => DB.prepare('INSERT INTO plaza_link_items (post_id, emoji, label, url, position) VALUES (?, ?, ?, ?, ?)').bind(post.id, l.emoji, l.label, l.url, i));
@@ -336,9 +338,12 @@ writes['PATCH /api/admin/plaza-posts/:id'] = async (ctx) => {
   const { text, options, links, photoBase64 } = ctx.body;
   const clean = validatePostContent(post.type, { text, options, links });
   if (clean.error) return json({ error: clean.error }, 400);
-  if (photoBase64) return json({ error: 'err_photo_not_yet' }, 400);
   const stmts = [DB.prepare('UPDATE plaza_posts SET text = ? WHERE id = ?').bind(clean.text, ctx.id)];
-  if (photoBase64 === null || photoBase64 === '') stmts.push(DB.prepare('UPDATE plaza_posts SET photo = NULL, photo_mime = NULL WHERE id = ?').bind(ctx.id));
+  if (photoBase64) {
+    const photo = decodePhoto(photoBase64);
+    if (photo.error) return json({ error: photo.error }, 400);
+    stmts.push(DB.prepare('UPDATE plaza_posts SET photo = ?, photo_mime = ? WHERE id = ?').bind(photo.bytes, photo.mime, ctx.id));
+  } else if (photoBase64 === null || photoBase64 === '') stmts.push(DB.prepare('UPDATE plaza_posts SET photo = NULL, photo_mime = NULL WHERE id = ?').bind(ctx.id));
   if (post.type === 'poll') {
     // By position, so renaming an option keeps its votes.
     const { results: existing } = await DB.prepare('SELECT id FROM plaza_poll_options WHERE post_id = ? ORDER BY position ASC, id ASC').bind(ctx.id).all();
@@ -779,6 +784,7 @@ const getDyn = [];
 const writeDyn = [];
 addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
 addVotesRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly });
+addPlazaRoutes({ routes, writeDyn, getDyn, json, adminOnly, ownerOnly, plazaOff, votingDay });
 addPushRoutes({ routes, writes, json });
 const passkeys = addPasskeyRoutes({ routes, writes, writeDyn, publicKeys: PUBLIC, json, hashToken, findUser, ownerOnly });
 
