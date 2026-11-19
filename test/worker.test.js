@@ -73,6 +73,14 @@ test('me returns the guest without token fields', async () => {
   assert.equal(b.name, 'Ana');
   assert.equal(b.token_hash, undefined);
 });
+test('me has isAdmin / isOwner like the Node server (the app reads these)', async () => {
+  const guest = await (await get('/api/me', 'ana-key')).json();
+  assert.equal(guest.isAdmin, false);
+  assert.equal(guest.isOwner, false);
+  const owner = await (await get('/api/me', 'ivo-key')).json();
+  assert.equal(owner.isAdmin, true);
+  assert.equal(owner.isOwner, true);
+});
 test('wall: pinned first, then newest; poll has tallies and my vote', async () => {
   const { posts } = await (await get('/api/plaza-posts', 'ana-key')).json();
   assert.deepEqual(posts.map((p) => p.text), ['pinned', 'which?', 'old']);

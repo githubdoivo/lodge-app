@@ -173,6 +173,11 @@ const routes = {
   ] }),
   '/api/me': async (ctx) => json({
     ...ctx.user,
+    // Same shape as the Node server (src/auth.js): the app reads these.
+    isAdmin: !!ctx.user.is_admin,
+    isOwner: !!ctx.user.is_owner,
+    tutorialSeen: !!ctx.user.tutorial_seen,
+    logo_customized: !!ctx.user.logo_customized,
     plazaEnabled: ctx.env.ENABLE_PLAZA === 'true',
     adminPromotionEnabled: ctx.env.ENABLE_ADMIN_PROMOTION === 'true',
   }),
