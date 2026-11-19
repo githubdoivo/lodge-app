@@ -444,9 +444,13 @@ test('claim key: 3+ letters, accents folded, works once even when tapped twice a
   const { db, env: e } = emptyEnv('production');
   db.prepare('INSERT INTO users (name, token_hash, token_enc) VALUES (?, ?, ?)').run('César', hash('cesar123456'), encrypt('cesar123456'));
   const find = async (name) => (await (await get('/api/auth/unclaimed-users?name=' + encodeURIComponent(name), null, e)).json()).users;
+  const claim = (userId) => send('POST', '/api/auth/claim-key', null, { userId }, e);
+  // closed until the owner opens it: no names listed, no key handed out
+  assert.deepEqual(await find('CESA'), []);
+  assert.equal(await errOf(await claim(1)), 'err_claim_closed');
+  db.prepare("INSERT INTO settings (key, value) VALUES ('claim_open', '1')").run();
   assert.deepEqual(await find('ce'), []);
   assert.deepEqual((await find('CESA')).map((u) => u.name), ['César']);
-  const claim = (userId) => send('POST', '/api/auth/claim-key', null, { userId }, e);
   assert.equal(await errOf(await claim(999)), 'err_user_not_found');
   const bodies = await Promise.all((await Promise.all([claim(1), claim(1), claim(1)])).map((r) => r.json()));
   assert.equal(bodies.filter((x) => x.token === 'cesar123456').length, 1);

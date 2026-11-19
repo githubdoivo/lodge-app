@@ -702,7 +702,11 @@ writes['POST /api/me/change-token'] = async (ctx) => {
 
 // src/keyClaim.js: names who never got their key, 3+ letters, accents folded.
 const fold = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+// Claiming a key by name is only open on the demo, or on the real Lodge when the owner turns on claim_open.
+// Otherwise anyone could claim an unclaimed guest's key by guessing their id.
+const claimOpen = async (env) => env.APP_ENV === 'demo' || (await setting(env, 'claim_open', '0')) === '1';
 routes['/api/auth/unclaimed-users'] = async (ctx) => {
+  if (!(await claimOpen(ctx.env))) return json({ users: [] });
   const term = String(ctx.url.searchParams.get('name') || '').trim();
   if (term.length < 3) return json({ users: [] });
   const { results } = await ctx.env.DB.prepare('SELECT id, name FROM users WHERE key_claimed_at IS NULL').all();
@@ -711,6 +715,7 @@ routes['/api/auth/unclaimed-users'] = async (ctx) => {
 };
 // One shot: the conditional UPDATE means two claims at once can't both win.
 writes['POST /api/auth/claim-key'] = async (ctx) => {
+  if (!(await claimOpen(ctx.env))) return json({ error: 'err_claim_closed' }, 403);
   const id = Number(ctx.body.userId);
   const user = await ctx.env.DB.prepare('SELECT id, name, token_enc, key_claimed_at FROM users WHERE id = ?').bind(id).first();
   if (!user) return json({ error: 'err_user_not_found' }, 400);
