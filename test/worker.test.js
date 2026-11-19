@@ -1,6 +1,6 @@
 // The Worker's read routes, run against a node:sqlite database shaped like D1
 // (same migration file). No Cloudflare runtime needed.
-import { test, before } from 'node:test';
+import { test, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
@@ -47,6 +47,9 @@ before(() => {
     ASSETS: { fetch: async () => new Response('<html>page</html>') },
   };
 });
+
+// Each test starts with a clean key-guessing budget (APP-LG-031), so earlier failures cannot tip it into a 429.
+beforeEach(() => { try { testDb.exec('DELETE FROM auth_attempts'); } catch { /* not made yet */ } });
 
 const get = (path, key, e = env) => worker.fetch(
   new Request('https://x.test' + path, { headers: key ? { authorization: 'Bearer ' + key } : {} }), e);
@@ -575,4 +578,49 @@ test('push: subscribe, send with a VAPID signature, drop expired, quiet without 
   } finally { globalThis.fetch = realFetch; }
   await send('POST', '/api/push/unsubscribe', 'ana-key', { endpoint: 'https://push.test/ok' }, e);
   assert.equal(count(), 0);
+});
+
+// APP-LG-031: key guessing is limited to 10 failed tries per address per 15 minutes.
+const fromIp = (ip, method, path, key, body) => worker.fetch(new Request('https://x.test' + path, {
+  method, headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip, ...(key ? { authorization: 'Bearer ' + key } : {}) },
+  body: body === undefined ? undefined : JSON.stringify(body),
+}), env);
+const tryKey = (ip, token) => fromIp(ip, 'POST', '/api/auth/login', null, { token });
+
+test('sign-in: the 11th wrong key in 15 minutes is a 429, even with the right key, and the window ends', async () => {
+  for (let i = 0; i < 10; i++) assert.equal((await tryKey('10.0.0.1', 'wrong' + i)).status, 401);
+  const r = await tryKey('10.0.0.1', 'wrong-again');
+  assert.equal(r.status, 429);
+  assert.equal((await r.json()).error, 'err_rate_limited');
+  assert.ok(Number(r.headers.get('retry-after')) > 890);
+  // A right guess during the lock-out gets the same answer: no way to tell.
+  assert.equal((await tryKey('10.0.0.1', 'ana-key')).status, 429);
+  // Another address is not affected.
+  assert.equal((await tryKey('10.0.0.2', 'ana-key')).status, 200);
+  // 15 minutes later the right key works again, and a fresh budget starts.
+  testDb.prepare("UPDATE auth_attempts SET reset_at = ? WHERE ip = '10.0.0.1'").run(Date.now() - 1);
+  assert.equal((await tryKey('10.0.0.1', 'ana-key')).status, 200);
+  assert.equal((await tryKey('10.0.0.1', 'wrong')).status, 401);
+  assert.equal(testDb.prepare("SELECT count FROM auth_attempts WHERE ip = '10.0.0.1'").get().count, 1);
+});
+
+test('sign-in: successful sign-ins and session tokens never use up the budget', async () => {
+  for (let i = 0; i < 15; i++) assert.equal((await tryKey('10.0.0.3', 'ana-key')).status, 200);
+  for (let i = 0; i < 12; i++) assert.equal((await fromIp('10.0.0.3', 'GET', '/api/me', 's.abc')).status, 200);
+  assert.equal((await tryKey('10.0.0.3', 'nope')).status, 401);
+});
+
+test('one budget: guessed keys in the header, wrong current keys and bad claims all count', async () => {
+  const ip = '10.0.0.4';
+  for (let i = 0; i < 4; i++) assert.equal((await fromIp(ip, 'GET', '/api/me', 'guess' + i)).status, 401);
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await fromIp(ip, 'POST', '/api/me/change-token', 'ana-key', { currentToken: 'bad' + i, newToken: 'whatever12' })).status, 401);
+  }
+  for (let i = 0; i < 3; i++) assert.equal((await fromIp(ip, 'POST', '/api/auth/claim-key', null, { userId: 9999 + i })).status, 400);
+  assert.equal((await fromIp(ip, 'GET', '/api/me', 'guess-x')).status, 429);
+  assert.equal((await fromIp(ip, 'POST', '/api/me/change-token', 'ana-key', { currentToken: 'bad', newToken: 'whatever12' })).status, 429);
+  assert.equal((await fromIp(ip, 'POST', '/api/auth/claim-key', null, { userId: 1 })).status, 429);
+  assert.equal((await tryKey(ip, 'ana-key')).status, 429);
+  // A signed-in guest with a session keeps using the app.
+  assert.equal((await fromIp(ip, 'GET', '/api/me', 's.abc')).status, 200);
 });

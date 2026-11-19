@@ -8,6 +8,7 @@ import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
 import { addMemoRoutes } from './workerMemo.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
 import { addPasskeyRoutes, passkeyRequired } from './workerPasskeys.js';
+import { clientIp, lockedFor, countFail, tooMany } from './workerRateLimit.js';
 import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
 const json = (body, status = 200) =>
@@ -123,8 +124,15 @@ async function authenticate(request, env, url) {
   if (!raw) return { error: json({ error: 'err_token_missing' }, 401) };
   if (!env.TOKEN_SECRET) return { error: json({ error: 'err_server' }, 500) };
   const token = String(raw).trim().toLowerCase();
+  // A key (not a random session) in the header is a guess like any sign-in: same budget.
+  const guessable = !isSessionToken(token);
+  const ip = clientIp(request);
+  if (guessable) { const wait = await lockedFor(env, ip); if (wait) return { error: tooMany(json, wait) }; }
   const user = await findUser(env, token);
-  if (!user) return { error: json({ error: 'err_token_invalid' }, 401) };
+  if (!user) {
+    if (guessable) await countFail(env, ip);
+    return { error: json({ error: 'err_token_invalid' }, 401) };
+  }
   if (!user.viaPasskey && passkeyRequired(env, user)) return { error: json({ error: 'err_passkey_required' }, 401) };
   if (!user.key_claimed_at) await stampClaimed(env, user.id);
   return { user, token };
@@ -213,8 +221,10 @@ const writes = {
     const token = (typeof ctx.body.token === 'string' ? ctx.body.token : '').trim().toLowerCase();
     if (!token) return json({ error: 'err_token_missing' }, 400);
     if (!ctx.env.TOKEN_SECRET) return json({ error: 'err_server' }, 500);
+    const wait = await lockedFor(ctx.env, ctx.ip);
+    if (wait) return tooMany(json, wait);
     const user = await findUser(ctx.env, token);
-    if (!user) return json({ error: 'err_token_invalid' }, 401);
+    if (!user) { await countFail(ctx.env, ctx.ip); return json({ error: 'err_token_invalid' }, 401); }
     await stampClaimed(ctx.env, user.id);
     // Owner and admins: the key alone opens nothing; Face ID confirms it (or is added now, once).
     if (!user.viaPasskey && passkeyRequired(ctx.env, user)) return passkeys.loginStep(ctx, user);
@@ -681,18 +691,22 @@ writes['PATCH /api/admin/users/:id/admin'] = async (ctx) => {
 };
 
 // ---- Key change, first-time key claim, wipes (APP-LG-017 slice 1) ----
-// Same rules as /me/change-token in src/routes.js (rate limiting comes later).
+// Same rules as /me/change-token in src/routes.js: a wrong current key or a taken key
+// counts as a failed try ("taken" says the key belongs to someone).
 writes['POST /api/me/change-token'] = async (ctx) => {
   const { DB, TOKEN_SECRET } = ctx.env;
   const current = String(ctx.body.currentToken ?? '').toLowerCase();
   const next = String(ctx.body.newToken ?? '').trim().toLowerCase();
+  const failed = async (status, error) => { await countFail(ctx.env, ctx.ip); return json({ error }, status); };
+  const wait = await lockedFor(ctx.env, ctx.ip);
+  if (wait) return tooMany(json, wait);
   const row = await DB.prepare('SELECT token_hash FROM users WHERE id = ?').bind(ctx.user.id).first();
-  if (!row || (await hashToken(TOKEN_SECRET, current)) !== row.token_hash) return json({ error: 'err_current_key_wrong' }, 401);
+  if (!row || (await hashToken(TOKEN_SECRET, current)) !== row.token_hash) return failed(401, 'err_current_key_wrong');
   if (!/^[a-z0-9]+$/.test(next)) return json({ error: 'err_key_invalid_chars' }, 400);
   if (next.length < 7) return json({ error: 'err_key_too_short' }, 400);
   const hash = await hashToken(TOKEN_SECRET, next);
   if (await DB.prepare('SELECT id FROM users WHERE token_hash = ? AND id != ?').bind(hash, ctx.user.id).first()) {
-    return json({ error: 'err_key_taken' }, 409);
+    return failed(409, 'err_key_taken');
   }
   try {
     await DB.prepare(`UPDATE users SET token_hash = ?, token_enc = ?, updated_at = ${now} WHERE id = ?`)
@@ -721,11 +735,13 @@ routes['/api/auth/unclaimed-users'] = async (ctx) => {
 // One shot: the conditional UPDATE means two claims at once can't both win.
 writes['POST /api/auth/claim-key'] = async (ctx) => {
   if (!(await claimOpen(ctx.env))) return json({ error: 'err_claim_closed' }, 403);
+  const wait = await lockedFor(ctx.env, ctx.ip);
+  if (wait) return tooMany(json, wait);
   const id = Number(ctx.body.userId);
   const user = await ctx.env.DB.prepare('SELECT id, name, token_enc, key_claimed_at FROM users WHERE id = ?').bind(id).first();
-  if (!user) return json({ error: 'err_user_not_found' }, 400);
+  if (!user) { await countFail(ctx.env, ctx.ip); return json({ error: 'err_user_not_found' }, 400); }
   const res = await ctx.env.DB.prepare(`UPDATE users SET key_claimed_at = ${now} WHERE id = ? AND key_claimed_at IS NULL`).bind(id).run();
-  if (user.key_claimed_at || !res.meta.changes) return json({ error: 'err_key_already_claimed' }, 400);
+  if (user.key_claimed_at || !res.meta.changes) { await countFail(ctx.env, ctx.ip); return json({ error: 'err_key_already_claimed' }, 400); }
   return json({ ok: true, name: user.name, token: await decryptToken(ctx.env.TOKEN_SECRET, user.token_enc) });
 };
 
@@ -792,7 +808,7 @@ export default {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     const path = url.pathname.replace(/\/+$/, '');
-    const ctx = { env, url, request, exec };
+    const ctx = { env, url, request, exec, ip: clientIp(request) };
     let handler, key, m;
     if (request.method === 'GET') {
       handler = routes[path]; key = path;

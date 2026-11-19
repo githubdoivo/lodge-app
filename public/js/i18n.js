@@ -463,7 +463,7 @@ export const translations = {
     // know the caller's language).
     err_token_missing: 'Chave em falta.',
     err_token_invalid: 'chave inválida, confirma e tenta outra vez.',
-    err_rate_limited: 'Demasiadas tentativas, tenta mais tarde.',
+    err_rate_limited: 'Demasiadas tentativas. Espera 15 minutos e tenta outra vez.',
     err_admin_only: 'Só admins têm acesso.',
     err_owner_only: 'Só a conta principal pode fazer isto.',
     err_current_key_wrong: 'Chave atual incorreta.',
@@ -981,7 +981,7 @@ export const translations = {
     account_title: 'Your account',
     err_token_missing: 'Missing key.',
     err_token_invalid: 'invalid key, check it and try again.',
-    err_rate_limited: 'Too many attempts, try again later.',
+    err_rate_limited: 'Too many tries. Wait 15 minutes and try again.',
     err_admin_only: 'Admin access only.',
     err_owner_only: 'Only the owner account can do this.',
     err_current_key_wrong: 'Current key is incorrect.',
