@@ -300,6 +300,41 @@ for (const deviceName of IOS_DEVICES) {
     await context.close();
   });
 
+  // APP-LG-028: the sign-in is the same place as lodge.appdoivo.com: the sharp
+  // export, the painting's own top mirrored behind the clock under the same veil,
+  // and the words on the grass under the cottage, never over its walls.
+  test(`login painting matches the Lodge page and the words sit under the cottage on ${deviceName}`, async () => {
+    const context = await iphoneContext(deviceName);
+    const page = await context.newPage();
+    await page.goto(base + '/');
+    await page.waitForSelector('#login:not(.hidden)', { timeout: WAIT_TIMEOUT });
+    for (let i = 0; i < 20 && await page.evaluate(() => window.scrollY) !== 160; i++) await page.waitForTimeout(50);
+    const s = await page.evaluate(() => {
+      const login = document.getElementById('login');
+      const before = getComputedStyle(login, '::before');
+      const after = getComputedStyle(login, '::after');
+      const paintingTop = login.getBoundingClientRect().top + 160;
+      return {
+        img: before.backgroundImage, strip: after.backgroundImage, flip: after.transform,
+        paintingH: login.getBoundingClientRect().height - 160,
+        greeting: login.querySelector('.greeting').getBoundingClientRect().bottom - paintingTop,
+        field: document.getElementById('token-input').getBoundingClientRect().top - paintingTop,
+        button: login.querySelector('#login-form button[type="submit"]')?.getBoundingClientRect().bottom ?? 0,
+        screen: innerHeight,
+      };
+    });
+    assert.match(s.img, /cottage\.webp/, 'the sign-in uses the sharp export');
+    assert.doesNotMatch(s.img, /login-bg\.jpg/);
+    assert.match(s.strip, /cottage\.webp/, 'the strip behind the clock is the painting, not a flat colour');
+    assert.match(s.strip, /rgba\(14, 32, 17, 0\.55\)/, 'the strip has the same veil as the painting top');
+    assert.notEqual(s.flip, 'none', 'the strip is mirrored, so the sky carries on with no seam');
+    // the cottage runs from about 27% to 60% of the painting's height
+    assert.ok(s.greeting <= s.paintingH * 0.27, `the greeting must sit in the sky above the roof: ${JSON.stringify(s)}`);
+    assert.ok(s.field >= Math.min(s.paintingH * 0.6, s.screen - 200) - 2, `the key field must stand under the cottage: ${JSON.stringify(s)}`);
+    assert.ok(s.button <= s.screen, `the sign-in button must stay on screen: ${JSON.stringify(s)}`);
+    await context.close();
+  });
+
   test(`main app (plaza + rata + best look + chat + memo tabs) has no horizontal overflow on ${deviceName}`, async () => {
     const context = await iphoneContext(deviceName);
     const page = await loginPage(context, ADMIN, '/');

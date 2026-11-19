@@ -443,7 +443,7 @@ h3 { font-size: 0.95rem; margin: 14px 0 6px; }
    (dark mode's own --paper is a dark purple) - jarring against the login
    photo. Matches it to the same brown while the login screen is showing,
    regardless of mode. */
-body:has(#login:not(.hidden)) { background-color: #241d17; }
+body:has(#login:not(.hidden)) { background-color: #16351c; }   /* APP-LG-028: the Lodge page's own colour */
 /* Plain "cover" - no extra transform:scale() on top of it. Cover already
    guarantees the illustration fills the entire screen with no gaps at its
    largest non-distorted size; an added scale() only ever throws away more
@@ -460,9 +460,11 @@ body:has(#login:not(.hidden)) { background-color: #241d17; }
   position: absolute;
   inset: 0;
   z-index: 0;
+  /* APP-LG-028: the same sharp export and the same veil as lodge.appdoivo.com,
+     so the Lodge page and the demo sign-in read as one place */
   background-image:
-    linear-gradient(180deg, rgba(14, 32, 17, 0.10) 0%, rgba(14, 32, 17, 0.04) 34%, rgba(14, 32, 17, 0.55) 80%),
-    url('/images/login-bg.jpg');
+    linear-gradient(rgba(14, 32, 17, .55), transparent 28%, transparent 62%, rgba(14, 32, 17, .7)),
+    url('/images/cottage.webp');
   /* Ivo's pick after seeing ten framings side by side: the house centred,
      with "bem-vinde" sitting over its wall.
      This is the 13 September painting, which never had the title painted
@@ -527,10 +529,16 @@ body:has(#login:not(.hidden)) { background-color: #241d17; }
   #login { background-color: #10230f; }
   #login::before {
     background-image:
-      linear-gradient(180deg, rgba(14, 32, 17, 0.10) 0%, rgba(14, 32, 17, 0.04) 34%, rgba(14, 32, 17, 0.55) 80%),
+      linear-gradient(rgba(14, 32, 17, .55), transparent 28%, transparent 62%, rgba(14, 32, 17, .7)),
       url('/images/login-bg-wide.jpg');
-    background-size: cover;
-    background-position: center center;
+    /* framed exactly like lodge.appdoivo.com's wide painting (APP-LG-028) */
+    background-size: 100% 100%, max(100%, calc((100lvh + var(--below)) * 2307 / 1538)) auto;
+    background-position: center, center -4lvh;
+  }
+  #login:not(.hidden)::after {
+    transform: scaleY(-1);
+    background: linear-gradient(rgba(14, 32, 17, .55), rgba(14, 32, 17, .55)),
+      url('/images/login-bg-wide.jpg') center top / max(100%, calc((100lvh + var(--below)) * 2307 / 1538)) auto no-repeat;
   }
   body:has(#login:not(.hidden)) { background-color: #10230f; }   /* APP-LG-001: moss like lodge.appdoivo.com, not near-black */
 }
@@ -604,21 +612,29 @@ body:has(#login:not(.hidden)) { position: static; }
    the painting's own bottom-edge green under the same dark overlay, so the
    two meet without a seam. */
 @media (pointer: coarse) and (orientation: portrait) and (max-width: 600px) {
-  #login:not(.hidden) { background-color: #2f522c; }
+  /* APP-LG-028: framed exactly like lodge.appdoivo.com on a phone: the painting
+     as tall as the screen plus the strip under Safari's bar, from the top, centred */
+  #login:not(.hidden) { background-color: #16351c; }
   #login:not(.hidden)::before {
-    background-size: 100% 100%, max(100%, calc(100lvh * 804 / 1538)) auto;
+    background-size: 100% 100%, auto 100%;
     background-position: center, center top;
   }
-  /* The strip above: the painting's top edge, mirrored, under the same light overlay */
+  /* The strip above: the painting's top edge, mirrored, under the same veil as
+     the painting's own top edge, so the sky carries on behind the clock */
   #login:not(.hidden)::after {
     transform: scaleY(-1);
-    background: linear-gradient(rgba(10, 16, 8, 0.10), rgba(10, 16, 8, 0.10)),
-      url('/images/login-bg.jpg') center top / max(100%, calc(100lvh * 804 / 1538)) auto no-repeat;
+    background: linear-gradient(rgba(14, 32, 17, .55), rgba(14, 32, 17, .55)),
+      url('/images/cottage.webp') center top / auto calc(100lvh + var(--below)) no-repeat;
   }
-  /* The greeting and form are placed on the painting, not on the bottom of the
-     screen: "boas-vindas" on the cottage's walls, the key field below it, on
-     every phone height. Anything lower simply scrolls. */
-  #login:not(.hidden) .cover { padding-top: calc(var(--above) + 100lvh * .57); }
+  /* Laid out like the Lodge page (Ivo, 19 Nov): the greeting in the sky above
+     the roof, where the Lodge page has its line, and the key form on the grass
+     under the cottage, where it has its countdown, never over the walls. The
+     form is lifted only as far as needed to keep it whole on a short screen. */
+  #login:not(.hidden) .cover { position: relative;
+    padding-top: min(calc(var(--above) + (100lvh + var(--below)) * .6), calc(var(--above) + 100lvh - var(--login-stack, 200px))); }
+  #login:not(.hidden):has(#demo-keys:not(.hidden)) { --login-stack: 330px; }
+  #login:not(.hidden) .cover > .greeting { position: absolute; left: 0; right: 0; margin: 0; padding: 0 16px;
+    top: calc(var(--above) + (100lvh + var(--below)) * .225 - 1.3rem); }
   #login:not(.hidden) .cover > .greeting { margin-top: 0; }
 }
 
@@ -3357,6 +3373,11 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 }
 @media (max-height: 700px) {
   #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover { padding-top: calc(var(--above) + 100lvh * .30); }
+}
+/* Phones: the demo too stands under the cottage, not over its walls (APP-LG-028) */
+@media (pointer: coarse) and (orientation: portrait) and (max-width: 600px) {
+  #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover {
+    padding-top: min(calc(var(--above) + (100lvh + var(--below)) * .6), calc(var(--above) + 100lvh - var(--login-stack, 200px))); }
 }
 
 /* Wide screens: the sign-in stack stands on the grass below the cottage, not in
