@@ -47,8 +47,50 @@ export async function ensureDemoUsers(env) {
         .bind(name, await hashToken(env.TOKEN_SECRET, key), await encryptToken(env.TOKEN_SECRET, key), name === PRESET_ADMIN_NAME ? 1 : 0, name));
     }
     await env.DB.batch(stmts);
+    await seedDemoContent(env);
   }
   demoSeeded = true;
+}
+
+// Sample posts and games for a freshly seeded demo (mirrors src/seedDemo.js), so
+// Wall, Rata and Snatch are not empty after each reset. Authors and entrants are
+// looked up by name; a single batch keeps it all-or-nothing.
+const SAMPLE_PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+const SAMPLE_CONSEQUENCES = ['Give the closest person a pedicure.', 'Confess the last time you lied.',
+  'Let the nearest person pick an accessory for you to wear the rest of the night.',
+  "Sit on someone's lap until the next consequence drops.", 'Use your best pickup line on a stranger in the room.'];
+const SAMPLE_PERSONAS = {
+  furnished: ['Velvet Armchair', 'Grandfather Clock', 'Lava Lamp', 'Persian Rug', 'Crystal Chandelier'],
+  swamp: ['Bog Spirit', 'Firefly', 'Mossy Toad', "Will-o'-the-Wisp", 'Lily Pad'],
+};
+const SAMPLE_LINKS = [['📃', 'Form', 'https://www.google.com/forms/about/'], ['🏠', 'Location', 'https://www.google.com/maps/search/?api=1&query=Braga%2C+Portugal'],
+  ['🎹', 'Playlist', 'https://open.spotify.com/'], ['📷', 'Album', 'https://photos.google.com/']];
+export async function seedDemoContent(env) {
+  const DB = env.DB;
+  // Whoever claims this row seeds; a request racing in at the same moment gets 0 changes and skips.
+  const claim = await DB.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('demo_content_seeded', '1')`).run();
+  if (!claim.meta?.changes) return;
+  const day = await votingDay(env);
+  const uid = (name) => '(SELECT id FROM users WHERE name = ?)';
+  const author = MOCK_NAMES[0];
+  const stmts = [];
+  const post = (type, text) => DB.prepare(`INSERT INTO plaza_posts (type, author_id, text) VALUES (?, ${uid()}, ?)`).bind(type, author, text);
+  const last = '(SELECT MAX(id) FROM plaza_posts)';
+  stmts.push(post('announcement', 'Boas-vindas à festa, a password do wifi é party-wifi-2026.'));
+  stmts.push(post('poll', 'Qual foi o melhor momento da noite até agora?'));
+  ['Rata', 'Snatch', 'Plaza', 'Ainda não sei'].forEach((label, i) =>
+    stmts.push(DB.prepare(`INSERT INTO plaza_poll_options (post_id, label, position) VALUES (${last}, ?, ?)`).bind(label, i)));
+  stmts.push(post('links', 'useful links 🔗'));
+  SAMPLE_LINKS.forEach(([emoji, label, url], i) =>
+    stmts.push(DB.prepare(`INSERT INTO plaza_link_items (post_id, emoji, label, url, position) VALUES (${last}, ?, ?, ?, ?)`).bind(emoji, label, url, i)));
+  stmts.push(DB.prepare(`INSERT INTO consequences (user_id, text, day, status, revealed_at) VALUES (${uid()}, ?, ?, 'used', ${now})`)
+    .bind(MOCK_NAMES[0], 'Act like a rat for 5 minutes.', day));
+  SAMPLE_CONSEQUENCES.forEach((text, i) =>
+    stmts.push(DB.prepare(`INSERT INTO consequences (user_id, text, day) VALUES (${uid()}, ?, ?)`).bind(MOCK_NAMES[(i + 1) % MOCK_NAMES.length], text, day)));
+  NIGHTS.forEach((night, i) => SAMPLE_PERSONAS[night].forEach((persona, j) =>
+    stmts.push(DB.prepare(`INSERT INTO contestants (name, night, user_id, photo, photo_mime, confirmed_at) VALUES (?, ?, ${uid()}, ?, 'image/png', datetime('now'))`)
+      .bind(persona, night, MOCK_NAMES[i * 5 + j], SAMPLE_PNG))));
+  await DB.batch(stmts);
 }
 export const resetDemoSeedFlag = () => { demoSeeded = false; };
 

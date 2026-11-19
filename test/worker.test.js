@@ -485,7 +485,14 @@ test('daily demo reset: clears what visitors made, files included, and seeds the
   const out = await resetDemo(e);
   assert.equal(out.files, 2);
   assert.deepEqual(deleted, ['a', 'b']);
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM plaza_posts').get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM plaza_posts WHERE text = 'spam'").get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM plaza_posts').get().n, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM plaza_poll_options').get().n, 4);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM plaza_link_items').get().n, 4);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM consequences').get().n, 6);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM contestants WHERE user_id IS NOT NULL').get().n, 10);
+  await resetDemo(e);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM plaza_posts').get().n, 3, 'a second reset does not double the samples');
   assert.equal(db.prepare("SELECT COUNT(*) n FROM users WHERE name = 'Visitor'").get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM users WHERE is_owner = 0').get().n, MOCK_NAMES.length);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM users WHERE is_owner = 1').get().n, 1);
