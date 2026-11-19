@@ -10,6 +10,7 @@ import { addVotesRoutes, ensureVoteRounds } from './workerVotes.js';
 import { addPlazaRoutes } from './workerPlaza.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
 import { addPasskeyRoutes, passkeyRequired } from './workerPasskeys.js';
+import { addToolRoutes, readerLang, localiseRows, translateAfter, queueTranslation, runPending } from './workerTools.js';
 import { clientIp, lockedFor, countFail, tooMany } from './workerRateLimit.js';
 import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
@@ -144,7 +145,7 @@ const readBody = async (request) => {
   try { const b = await request.json(); return b && typeof b === 'object' ? b : {}; } catch { return {}; }
 };
 
-async function plazaPosts(env, userId) {
+async function plazaPosts(env, userId, lang = null) {
   const { results: posts } = await env.DB.prepare(`
     SELECT p.id, p.type, p.text, p.pinned_at AS pinnedAt, p.created_at, u.name AS author,
            (p.photo IS NOT NULL) AS hasPhoto
@@ -159,11 +160,16 @@ async function plazaPosts(env, userId) {
   const { results: mine } = await env.DB.prepare(
     'SELECT post_id, option_id FROM plaza_poll_votes WHERE user_id = ?').bind(userId).all();
   const strip = ({ post_id, ...rest }) => rest; // eslint-disable-line no-unused-vars
-  return posts.map((p) => {
-    if (p.type === 'links') return { ...p, links: links.filter((l) => l.post_id === p.id).map(strip) };
+  const wall = posts.filter((p) => p.type === 'announcement' || p.type === 'poll' || p.type === 'links');
+  const tPosts = new Map((await localiseRows(env.DB, 'plaza_post', wall, lang)).map((p) => [p.id, p]));
+  const tOptions = await localiseRows(env.DB, 'poll_option', options, lang, 'label');
+  const tLinks = await localiseRows(env.DB, 'link_item', links, lang, 'label');
+  return posts.map((q) => {
+    const p = tPosts.get(q.id) || q;
+    if (p.type === 'links') return { ...p, links: tLinks.filter((l) => l.post_id === p.id).map(strip) };
     if (p.type !== 'poll') return p;
     const v = mine.find((m) => m.post_id === p.id);
-    return { ...p, options: options.filter((o) => o.post_id === p.id).map(strip), myOptionId: v ? v.option_id : null };
+    return { ...p, options: tOptions.filter((o) => o.post_id === p.id).map(strip), myOptionId: v ? v.option_id : null };
   });
 }
 
@@ -193,16 +199,16 @@ const routes = {
   }),
   '/api/plaza-posts': async (ctx) => {
     if (ctx.env.ENABLE_PLAZA !== 'true') return json({ error: 'err_not_found' }, 404);
-    return json({ posts: await plazaPosts(ctx.env, ctx.user.id) });
+    return json({ posts: await plazaPosts(ctx.env, ctx.user.id, readerLang(ctx)) });
   },
   '/api/consequences/current': async (ctx) => {
     const { results } = await ctx.env.DB.prepare(`${REVEALED} LIMIT 1`).all();
     const pending = await ctx.env.DB.prepare(`SELECT COUNT(*) AS n FROM consequences WHERE status = 'pending'`).first();
-    return json({ current: results[0] || null, pending: pending.n });
+    return json({ current: (await localiseRows(ctx.env.DB, 'consequence', results, readerLang(ctx)))[0] || null, pending: pending.n });
   },
   '/api/consequences/revealed': async (ctx) => {
     const { results } = await ctx.env.DB.prepare(REVEALED).all();
-    return json({ consequences: results });
+    return json({ consequences: await localiseRows(ctx.env.DB, 'consequence', results, readerLang(ctx)) });
   },
   '/api/admin/consequences': async (ctx) => {
     const off = adminOnly(ctx); if (off) return off;
@@ -269,7 +275,7 @@ const writes = {
       if (/UNIQUE constraint failed/.test(String(err?.message))) return json({ error: 'err_already_voted_poll' }, 400);
       throw err;
     }
-    return json({ posts: await plazaPosts(ctx.env, ctx.user.id) });
+    return json({ posts: await plazaPosts(ctx.env, ctx.user.id, readerLang(ctx)) });
   },
   // New Wall post (src/plaza.js createPlazaPost), any admin. Photos wait for
   // R2 (APP-LG-010); translations and push are not on the Worker yet.
@@ -287,6 +293,7 @@ const writes = {
       ? clean.options.map((label, i) => DB.prepare('INSERT INTO plaza_poll_options (post_id, label, position) VALUES (?, ?, ?)').bind(post.id, label, i))
       : clean.links.map((l, i) => DB.prepare('INSERT INTO plaza_link_items (post_id, emoji, label, url, position) VALUES (?, ?, ?, ?, ?)').bind(post.id, l.emoji, l.label, l.url, i));
     if (extra.length) await DB.batch(extra);
+    await queueWallTranslations(ctx, post.id);
     const bodyByType = {
       poll: { pt: 'há uma nova sondagem na wall, vem votar.', en: 'there’s a new poll on the wall, come and vote.' },
       links: { pt: 'há links novos na wall.', en: 'there are new links on the wall.' },
@@ -366,6 +373,7 @@ writes['PATCH /api/admin/plaza-posts/:id'] = async (ctx) => {
   }
   stmts.push(DB.prepare("DELETE FROM translations WHERE entity_type = 'plaza_post' AND entity_id = ?").bind(ctx.id));
   await DB.batch(stmts);
+  await queueWallTranslations(ctx, ctx.id);
   return json({ ok: true, id: ctx.id });
 };
 
@@ -378,7 +386,8 @@ writes['POST /api/consequences'] = async (ctx) => {
   const mine = await ctx.env.DB.prepare('SELECT id FROM consequences WHERE user_id = ? AND day = ?').bind(ctx.user.id, day).first();
   if (mine) return json({ error: 'err_consequence_already_suggested_today' }, 409);
   try {
-    await ctx.env.DB.prepare(`INSERT INTO consequences (user_id, text, day, created_at) VALUES (?, ?, ?, ${now})`).bind(ctx.user.id, text, day).run();
+    const row = await ctx.env.DB.prepare(`INSERT INTO consequences (user_id, text, day, created_at) VALUES (?, ?, ?, ${now}) RETURNING id`).bind(ctx.user.id, text, day).first();
+    translateAfter(ctx, 'consequence', row.id, 'text', text);
   } catch (err) {
     if (/UNIQUE constraint failed/.test(String(err?.message))) return json({ error: 'err_consequence_already_suggested_today' }, 409);
     throw err;
@@ -546,6 +555,20 @@ writes['DELETE /api/votes/pending'] = async (ctx) => {
   return json({ ok: true });
 };
 
+// Wall text, poll options and link labels, translated after the answer has gone out.
+async function queueWallTranslations(ctx, postId) {
+  const { DB } = ctx.env;
+  const post = await DB.prepare('SELECT text FROM plaza_posts WHERE id = ?').bind(postId).first();
+  const { results: opts } = await DB.prepare('SELECT id, label FROM plaza_poll_options WHERE post_id = ?').bind(postId).all();
+  const { results: lnks } = await DB.prepare('SELECT id, label FROM plaza_link_items WHERE post_id = ?').bind(postId).all();
+  ctx.exec.waitUntil((async () => {
+    if (post?.text) await queueTranslation(DB, 'plaza_post', postId, 'text', post.text);
+    for (const o of opts) await queueTranslation(DB, 'poll_option', o.id, 'label', o.label);
+    for (const l of lnks) await queueTranslation(DB, 'link_item', l.id, 'label', l.label);
+    await runPending(ctx.env).catch(() => {});
+  })());
+}
+
 const pick = (list) => list[crypto.getRandomValues(new Uint32Array(1))[0] % list.length];
 writes['POST /api/chat/messages'] = async (ctx) => {
   const { DB } = ctx.env;
@@ -560,7 +583,8 @@ writes['POST /api/chat/messages'] = async (ctx) => {
       DB.prepare('INSERT INTO wall_pseudonym_history (user_id, pseudonym) VALUES (?, ?)').bind(ctx.user.id, pseudonym),
     ]);
   }
-  await DB.prepare('INSERT INTO messages (user_id, text, pseudonym) VALUES (?, ?, ?)').bind(ctx.user.id, text, pseudonym).run();
+  const msg = await DB.prepare('INSERT INTO messages (user_id, text, pseudonym) VALUES (?, ?, ?) RETURNING id').bind(ctx.user.id, text, pseudonym).first();
+  translateAfter(ctx, 'message', msg.id, 'text', text);
   await DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 15)').run();
   ctx.exec.waitUntil(broadcast(ctx.env, { title: { pt: 'plaza', en: 'plaza' },
     body: { pt: `${pseudonym} acabou de partilhar algo novo na plaza.`, en: `${pseudonym} just shared something new in the plaza.` },
@@ -794,6 +818,7 @@ addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly, no
 addVotesRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly });
 addPlazaRoutes({ routes, writeDyn, getDyn, json, adminOnly, ownerOnly, plazaOff, votingDay });
 addPushRoutes({ routes, writes, json });
+addToolRoutes({ routes, writes, publicKeys: PUBLIC, json, ownerOnly, hashToken, encryptToken, newUserKey, now });
 const passkeys = addPasskeyRoutes({ routes, writes, writeDyn, publicKeys: PUBLIC, json, hashToken, findUser, ownerOnly });
 
 // Daily reset (cron trigger): the demo goes back to its starting state. People and

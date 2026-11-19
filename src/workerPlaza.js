@@ -1,5 +1,6 @@
 // Plaza on the Worker (APP-LG-033): chat history, Wall post photos, admin post list,
 // Wall pseudonyms. Port of src/chat.js and the Plaza routes in src/routes.js.
+import { readerLang, translationsFor } from './workerTools.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 
 const pick = (list) => list[crypto.getRandomValues(new Uint32Array(1))[0] % list.length];
@@ -12,7 +13,9 @@ export function addPlazaRoutes({ routes, getDyn, writeDyn, json, adminOnly, owne
     const { DB } = ctx.env;
     await DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 15)').run();
     const { results } = await DB.prepare('SELECT id, text, created_at, pseudonym AS author FROM messages ORDER BY id ASC').all();
-    return json({ messages: results.map((m) => ({ ...m, time: timeIn(m.created_at) })) });
+    const lang = readerLang(ctx);
+    const t = lang ? await translationsFor(DB, 'message', results.map((m) => m.id), lang) : null;
+    return json({ messages: results.map((m) => ({ ...m, text: t?.get(`message:${m.id}:text`) ?? m.text, time: timeIn(m.created_at) })) });
   };
 
   // Any signed-in guest, same as the post itself.

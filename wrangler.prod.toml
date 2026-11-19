@@ -4,6 +4,11 @@ main = "src/worker.js"
 # The real Lodge (APP-LG-022): lodge.appdoivo.com
 routes = [{ pattern = "lodge.appdoivo.com/*", zone_name = "appdoivo.com" }]
 compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The PDF book uses the browser build of pdfkit (fonts built in, no file reads)
+[alias]
+pdfkit = "pdfkit/js/pdfkit.standalone.js"
 
 [assets]
 directory = "./public"

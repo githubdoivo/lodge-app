@@ -4,6 +4,11 @@ main = "src/worker.js"
 # The demo's own address (APP-LG-026)
 routes = [{ pattern = "lodge-demo.appdoivo.com/*", zone_name = "appdoivo.com" }]
 compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The PDF book uses the browser build of pdfkit (fonts built in, no file reads)
+[alias]
+pdfkit = "pdfkit/js/pdfkit.standalone.js"
 
 # Pages and static files; /api/* always runs the Worker first.
 [assets]
