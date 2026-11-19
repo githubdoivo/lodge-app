@@ -6,6 +6,7 @@ import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
 import { addMemoRoutes } from './workerMemo.js';
+import { addVotesRoutes, ensureVoteRounds } from './workerVotes.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
 import { addPasskeyRoutes, passkeyRequired } from './workerPasskeys.js';
 import { clientIp, lockedFor, countFail, tooMany } from './workerRateLimit.js';
@@ -505,6 +506,7 @@ writes['POST /api/votes'] = async (ctx) => {
   if (own && own.id === contestantId) return err('err_cannot_vote_self');
   const { row, partnerId, round } = await voteRowFor(env, user.id, night);
   if (row) return err(partnerId ? 'err_duo_already_voted' : 'err_already_voted');
+  await ensureVoteRounds(env);
   await env.DB.prepare(`INSERT INTO votes (user_id, contestant_id, night, round, confirmed_at) VALUES (?, ?, ?, ?, ${partnerId ? 'NULL' : "datetime('now')"})`)
     .bind(user.id, contestantId, night, round).run();
   return json({ ok: true, pending: !!partnerId }, 201);
@@ -776,6 +778,7 @@ const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login', '/a
 const getDyn = [];
 const writeDyn = [];
 addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
+addVotesRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly });
 addPushRoutes({ routes, writes, json });
 const passkeys = addPasskeyRoutes({ routes, writes, writeDyn, publicKeys: PUBLIC, json, hashToken, findUser, ownerOnly });
 
