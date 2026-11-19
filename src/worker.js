@@ -167,7 +167,7 @@ const REVEALED = `
 const routes = {
   '/api/version': async (ctx) => json({ version: pkg.version, env: ctx.env.APP_ENV || null, runtime: 'worker' }),
   // The shared logins the demo's sign-in screen offers (src/demo.js demoKeys()).
-  '/api/demo': async (ctx) => json({ keys: ctx.env.APP_ENV !== 'demo' ? [] : [
+  '/api/demo': async (ctx) => json({ partyOn: await claimOpen(ctx.env), keys: ctx.env.APP_ENV !== 'demo' ? [] : [
     { role: 'guest', name: DEMO_GUEST_NAME, key: generateDemoUserToken(DEMO_GUEST_NAME) },
     { role: 'admin', name: PRESET_ADMIN_NAME, key: generateDemoUserToken(PRESET_ADMIN_NAME) },
   ] }),
@@ -578,7 +578,7 @@ routes['/api/admin/users'] = async (ctx) => {
 routes['/api/admin/settings'] = async (ctx) => {
   const off = adminOnly(ctx); if (off) return off;
   const row = await ctx.env.DB.prepare("SELECT value FROM settings WHERE key = 'day_rollover_hour'").first();
-  return json({ dayRolloverHour: Number(row ? row.value : 6) });
+  return json({ dayRolloverHour: Number(row ? row.value : 6), partyOn: await claimOpen(ctx.env) });
 };
 routes['/api/dedications/mine'] = async (ctx) => json({ dedication: await myDedication(ctx) });
 routes['/api/admin/dedications'] = async (ctx) => {
@@ -590,7 +590,12 @@ routes['/api/admin/dedications'] = async (ctx) => {
 
 writes['PUT /api/admin/settings'] = async (ctx) => {
   const off = adminOnly(ctx); if (off) return off;
-  const { dayRolloverHour } = ctx.body;
+  const { dayRolloverHour, partyOn } = ctx.body;
+  if (partyOn !== undefined) {
+    // Party On (APP-LG-030): the owner's one switch. Off sends strangers to the demo and closes claiming a key by name.
+    const off2 = ownerOnly(ctx); if (off2) return off2;
+    await setSettingStmt(ctx.env.DB, 'claim_open', partyOn ? '1' : '0').run();
+  }
   if (dayRolloverHour !== undefined) {
     const h = Number(dayRolloverHour);
     if (!Number.isInteger(h) || h < 0 || h > 23) return json({ error: 'err_invalid_rollover_hour' }, 400);

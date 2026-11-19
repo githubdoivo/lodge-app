@@ -84,7 +84,12 @@ async function boot() {
   // (see showApp()), so the login screen never carries a night theme.
   const token = getToken();
   if (!token) {
+    // Party On (APP-LG-030): off, a stranger with no session and no personal link lands on the demo.
+    const link = new URLSearchParams(location.search).get('key');
+    if (link) { $('token-input').value = link; history.replaceState(null, '', location.pathname); }
+    else if (await partyIsOff()) { location.replace('https://lodge-demo.appdoivo.com/'); return; }
     showLogin();
+    if (link) $('login-form').requestSubmit();
     registerPushWorker();
     return;
   }
@@ -112,6 +117,10 @@ async function boot() {
  */
 function registerPushWorker() {
   registerServiceWorker().catch(() => {});
+}
+
+async function partyIsOff() {
+  try { return (await (await fetch('/api/demo')).json()).partyOn === false; } catch { return false; }
 }
 
 function showLogin() {

@@ -502,6 +502,14 @@
           </div>
         </div>
 
+        <!-- Party On (APP-LG-030): owner-only. Off sends strangers to the demo and closes claiming a key by name. -->
+        <div class="card hidden" id="party-card">
+          <h2 data-i18n="party_title">Festa ligada</h2>
+          <p class="help" data-i18n="party_help">Desligada, quem chega sem ligação vai para a demo.</p>
+          <button type="button" id="party-btn" class="small" aria-pressed="false" data-i18n="party_off">Desligada</button>
+          <span id="party-msg" class="muted"></span>
+        </div>
+
         <!-- Face ID / passkeys (APP-LG-001): required for owner and admins, optional for guests -->
         <div class="card" id="faceid-card">
           <h2 data-i18n="faceid_title">face id</h2>

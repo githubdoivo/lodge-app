@@ -224,6 +224,7 @@ async function boot() {
     // every guest (see POST /admin/memo/trigger-next), the same as
     // revealing a consequence, which admins have always been able to do.
     $('memo-trigger-card').classList.toggle('hidden', !memoEnabled);
+    if (isOwner) wirePartySwitch();
     if (!isOwner) {
       // Any admin - not just the owner - can post to Plaza (see requireAdmin
       // on POST /admin/plaza-posts), so the tab stays visible.
@@ -2626,3 +2627,24 @@ boot().then(() => consumePendingDeepLink(followDeepLink));
 onConnectionChange((isOffline) => {
   document.getElementById('offline-banner')?.classList.toggle('hidden', !isOffline);
 });
+
+// Party On (APP-LG-030): the owner's one switch for the real Lodge.
+async function wirePartySwitch() {
+  const btn = $('party-btn');
+  const paint = (on) => {
+    btn.setAttribute('aria-pressed', String(on));
+    btn.dataset.i18n = on ? 'party_on' : 'party_off';
+    btn.textContent = t(btn.dataset.i18n);
+  };
+  try { paint((await api('/admin/settings')).partyOn); } catch { return; }
+  $('party-card').classList.remove('hidden');
+  if (btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', async () => {
+    const next = btn.getAttribute('aria-pressed') !== 'true';
+    btn.disabled = true;
+    try { await api('/admin/settings', { method: 'PUT', body: { partyOn: next } }); paint(next); }
+    catch (err) { $('party-msg').textContent = err.message; }
+    btn.disabled = false;
+  });
+}

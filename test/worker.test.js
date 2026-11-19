@@ -440,6 +440,22 @@ test('change key: wrong current, bad chars, too short and taken are refused; the
   assert.equal(decode(testDb.prepare('SELECT token_enc FROM users WHERE id = 1').get().token_enc), 'ananova7');
   testDb.prepare("UPDATE users SET token_hash = ?, token_enc = 'x' WHERE id = 1").run(hash('ana-key'));
 });
+test('party on: only the owner flips it; /api/demo tells the page; claiming follows it', async () => {
+  const { db, env: e } = emptyEnv('production');
+  db.prepare("INSERT INTO users (name, token_hash, token_enc, is_owner, is_admin) VALUES ('Ivo', 'h1', 'x', 1, 1)").run();
+  db.prepare("INSERT INTO users (name, token_hash, token_enc, is_admin) VALUES ('Rui', 'h2', 'x', 1)").run();
+  db.prepare('INSERT INTO sessions (token_hash, user_id) VALUES (?, 1)').run(hash('s.own'));
+  db.prepare('INSERT INTO sessions (token_hash, user_id) VALUES (?, 2)').run(hash('s.rui'));
+  assert.equal((await (await get('/api/demo', null, e)).json()).partyOn, false);
+  assert.equal((await send('PUT', '/api/admin/settings', 's.rui', { partyOn: true }, e)).status, 403);
+  assert.equal((await (await get('/api/demo', null, e)).json()).partyOn, false);
+  assert.equal((await send('PUT', '/api/admin/settings', 's.own', { partyOn: true }, e)).status, 200);
+  assert.equal((await (await get('/api/demo', null, e)).json()).partyOn, true);
+  assert.equal((await (await get('/api/admin/settings', 's.own', e)).json()).partyOn, true);
+  assert.equal((await send('PUT', '/api/admin/settings', 's.own', { partyOn: false }, e)).status, 200);
+  assert.equal((await (await get('/api/demo', null, e)).json()).partyOn, false);
+  assert.equal((await (await get('/api/demo', null, { ...e, APP_ENV: 'demo' })).json()).partyOn, true);
+});
 test('claim key: 3+ letters, accents folded, works once even when tapped twice at once', async () => {
   const { db, env: e } = emptyEnv('production');
   db.prepare('INSERT INTO users (name, token_hash, token_enc) VALUES (?, ?, ?)').run('César', hash('cesar123456'), encrypt('cesar123456'));
