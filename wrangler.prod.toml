@@ -1,0 +1,33 @@
+name = "lodge"
+main = "src/worker.js"
+
+# The real Lodge (APP-LG-022): lodge.appdoivo.com
+routes = [{ pattern = "lodge.appdoivo.com/*", zone_name = "appdoivo.com" }]
+compatibility_date = "2025-11-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[vars]
+APP_ENV = "production"
+ENABLE_PLAZA = "true"
+ENABLE_MEMO = "true"
+ENABLE_ADMIN_PROMOTION = "true"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lodge"
+database_id = "30b90bcb-6464-41f3-8482-1ddfa2450019"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "lodge-files"
+jurisdiction = "eu"
+
+# Secret (never in this file): TOKEN_SECRET, the same value as the old .env, so personal links keep working.
+
+[observability]
+enabled = true
+head_sampling_rate = 1
