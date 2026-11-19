@@ -107,10 +107,8 @@ API scenarios plus UI scenarios on iPhone and desktop, with a
 
 **Environments**
 
-- **Production** (`fly.toml`): persistent volume, deployed only from `main`.
-- **Demo** (`fly.demo.toml`): public, mock data only.
-- A QA copy and an on-screen version badge were removed on 2026-11-16
-  (APP-LG-003): until the next party, tested changes go straight to production.
+- **Demo and production** run as Cloudflare Workers (`wrangler.toml`), deployed from `main` with `npm run deploy`.
+- The public demo holds mock data only and resets daily.
 
 **Flaky test investigation**
 
@@ -132,45 +130,17 @@ both faster and deterministic. The reasoning is written up in
 
 ## Stack
 
-- Node.js 23.4+ (uses the built-in `node:sqlite`, no native build step)
-- Express, node-cron, web-push
+- Cloudflare Workers (the API and static pages), D1 (database) and R2 (files), with a cron trigger for the daily jobs
 - Frontend: PWA in plain HTML/CSS/JS (works on iPhone and Android without an app store)
 
 ## Running locally
 
-```powershell
+```
 npm install
-copy .env.example .env      # on macOS/Linux: cp .env.example .env
-npm run genkeys             # generates the VAPID keys; copy them into .env
-npm start
+npx wrangler dev --local
 ```
 
-On first start the owner account is created and its token is printed in the
-terminal. Keep it safe. To see it again:
-
-```powershell
-npm run admin-token
-```
-
-Open http://localhost:3001 (or the port set in `.env`), log in with that
-token, and go to Settings to:
-
-- Create users (generates a key for each; send it to them).
-- Post to the Wall (announcement or poll).
-- Pick the night to manage (Furnished / Swamp) and, for that night: register
-  contestants, control the vote (registration, open, close, reveal results
-  in stages), and see every vote.
-- See and reveal consequences, and record who's holding the rata.
-
-Optional local env flags (see `.env.example`):
-
-- `ENABLE_PLAZA=true` - turns on the Wall tab (off by default locally; on in
-  both QA and production).
-- `ENABLE_ADMIN_PROMOTION=true` - lets the owner promote/revoke other users'
-  admin status from Settings.
-- `SEED_DEMO=true` - auto-loads demo users/contestants/consequences on every
-  boot. Never set this in production; it's meant for QA/local preview
-  (equivalent to running `npm run seed-demo` manually).
+Sign in with the demo keys the sign-in page offers, then use Settings to create users, post to the Wall, manage nights and reveal consequences. See [SETUP.md](SETUP.md).
 
 ## Tests
 
@@ -203,51 +173,17 @@ device). Each notification opens the app straight to the relevant tab. See
 - Push requires HTTPS. It works on `localhost`; in production use a host with
   HTTPS (the ones suggested in [SETUP.md](SETUP.md) provide it automatically).
 
-## Configuration (.env)
+## Configuration
 
-- `PORT` - server port (default 3000; this project uses 3001 locally).
-- `NODE_ENV` - set to `production` only in the real deployment (fly.toml). Gates
-  `ADMIN_TOKEN` below (`mossy` has its own switch, see `ENABLE_DEV_LOGIN`).
-- `ADMIN_TOKEN` - pins the owner's access key outside production. If empty (or
-  in production), one is generated the same way any user's key is.
-- `ENABLE_DEV_LOGIN` - lets a `mossy` login always resolve to the owner
-  regardless of their real key (see `findUserByToken` in `src/auth.js`). Dev/QA
-  only - deliberately never set in `fly.toml`, so the safe default (off) holds
-  even if some other env var fails to propagate correctly.
-- `ADMIN_NAME` - the owner's display name.
-- `TOKEN_SECRET` - secret used to encrypt and index user tokens. Keep it out of
-  the database and never share it. If you change it, nobody can log in.
-- `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` - Web Push (`npm run genkeys`).
-- `ENABLE_ADMIN_PROMOTION` - lets the owner promote/revoke other users' admin status.
-- `ENABLE_PLAZA` - turns on the Wall tab. Off by default locally; on in both QA and production.
-- `SEED_DEMO` - auto-loads demo data on boot. QA only, never production.
-- `DB_FILE` - (optional) database path; used by the tests (`:memory:` or a temp file).
+Variables live in `wrangler.toml` (`[vars]`) or as Worker secrets; see [SETUP.md](SETUP.md).
 
 ## Deploy & hosting
 
-See [SETUP.md](SETUP.md) for the full hosting guide: readiness checklist,
-step-by-step Fly.io deploy, free hosting options for the app and database, and
-where to buy a domain. A `Dockerfile` and `fly.toml` are included.
-
-The database lives in `data/app.sqlite`. On platforms with an ephemeral
-filesystem, attach a persistent volume mounted at the database path so votes and
-consequences survive each deploy.
-
-## Notes
-
-- The database is stored in `data/app.sqlite` (ignored by Git).
-- Demo data (users, contestants and votes per night, consequences) for
-  preview: `npm run seed-demo`. Do not use in production.
-- Guest names: the repo only ships mock names. For a real event, put the
-  guest list in `data/guest-list.txt` (one name per line, gitignored) and the
-  "create guest list" button and demo seed use it instead.
-- Any CLI script that imports `src/db.js` must load `dotenv` first
-  (`import 'dotenv/config';`), otherwise `TOKEN_SECRET` is undefined and the
-  token data can be corrupted.
+Cloudflare Workers with D1 and R2. `npm run deploy` runs `wrangler deploy`; [SETUP.md](SETUP.md) has the details.
 
 ## Face ID (APP-LG-001)
 
 - **Owner and admins** sign in with Face ID. The key alone opens nothing for them: the first sign-in with the key asks them to add Face ID on that phone, and after that the key must be confirmed with it (or they tap "sign in with face id" and skip the key).
 - **Guests** keep using their key. Face ID is optional, added from Settings.
-- **Lost phone:** the owner clears anyone's Face ID from Manage Users (the face icon), which also signs them out. If the owner loses theirs, run `npm run reset-owner-faceid` on the server (`fly ssh console`), then sign in with the owner key (`npm run admin-token`).
+- **Lost phone:** the owner clears anyone's Face ID from Manage Users (the face icon), which also signs them out. If the owner loses theirs, run `npm run reset-owner-faceid` from the project folder, then sign in with the owner key.
 - The public demo's shared accounts have no Face ID. To try it there, the **face id** demo button makes a private admin for that browser that works like the real owner and admins (key needs Face ID; *entrar com face id* signs in alone). Kept in memory, gone on restart. Test suites other than `test/passkeys.test.js` set `ADMIN_PASSKEY=off`; production never sets it.

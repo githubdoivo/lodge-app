@@ -52,84 +52,10 @@ session's work and deploy once at the end.
 5. Open a PR and merge it into `main` once CI is green
    (delete the branch on merge - `gh pr merge --merge --delete-branch`).
    There is no QA step any more (removed 2026-11-16, APP-LG-003).
-6. Only after merging: deploy `main` to production with
-   `scripts/deploy.sh prod`, then the demo with `SKIP_TESTS=1 scripts/deploy.sh demo`.
-   Fly's GitHub integration is connected but has
-   not reliably auto-deployed on push in practice, so treat this script as
-   the real deploy step, not the integration.
+6. Only after merging: `npm run deploy` (`wrangler deploy`) puts `main` on
+   Cloudflare Workers. `~/bin/ship` tests first and deploys only if they pass.
 7. Verify production directly (HTTP check, login, and whatever the batch
    actually touched) before considering the session's work done.
-
-### The app is closed (23 September 2026)
-
-**Both apps are scaled to zero machines** - `fly scale count 0` on
-`appdoivo` and `lodge-qa`. The party is over and nothing needs to be
-running; neither domain answers, and nothing can wake them, which is the
-difference between this and stopping a machine (`auto_start_machines` is
-on, so any stray request would have restarted a stopped one and started
-charging again).
-
-**The production volume was destroyed the same day** - `appdoivo_data`,
-`vol_v8ep3d82yoxxg65v`, 20GB, gone. Ivo had already downloaded the photos
-and chose to delete it rather than keep paying ~$3/month for storage that
-volumes are charged for whether or not a machine is attached. That was the
-only remaining cost; nothing else here is billed.
-
-So there is **no production data left on Fly** - not the photos, and not
-`/data/app.sqlite`, which held the guest accounts and their access keys,
-Wall, Plaza, Rata, the dedications, and the night results. Whatever was
-saved off the app before this is the only copy there is.
-
-What does still exist: both apps, their secrets, and their IPs. The apps
-themselves cost nothing with no machines running, and the app makes no
-Claude API calls with nothing running.
-
-To bring it back:
-
-```
-scripts/deploy.sh prod      # creates a machine and a new, empty volume
-```
-
-**It comes back empty**, and that is the part to know before promising
-anyone their account still works. The deploy provisions a fresh volume from
-the `[[mounts]]` block in `fly.toml` and the app builds a new database on
-first boot, with a new owner token from `ADMIN_TOKEN`. Every guest key is
-gone, so everybody would have to be re-created and re-invited. Same story
-for QA with `scripts/deploy.sh qa`, which never had a volume and always
-came back empty anyway.
-
-### The production volume (extended 12 Sept 2026, deleted 23 Sept 2026)
-
-**This volume no longer exists** - see the section above. What follows is
-kept as the record of why it was sized the way it was, and is worth reading
-before provisioning another one for a second party.
-
-**`appdoivo_data` was extended to 20GB on 12 September 2026.** Fly extended
-it in place, with no restart and no downtime.
-
-**The party is 18-20 September 2026.** Memo stores every uploaded photo
-and video, plus the generated day videos, as real files on the production
-volume (`/data/memo-uploads`) - not as rows in SQLite. At its original
-**1GB** Memo would have filled it on day one, and a full disk means uploads
-start failing mid-party. Memo opens itself on **17 September** (see
-`MEMO_START_DATE` in `fly.toml`), the day before the party - enough margin
-to catch a problem while it is still fixable, without a week of
-notifications first.
-
-Sizing: ~50 guests x 5 slots/day at a realistic ~12MB average is ~3GB a
-day, so 20GB covers the whole weekend with room to spare.
-
-```
-fly volumes extend vol_v8ep3d82yoxxg65v -s 20 -a appdoivo
-```
-
-Two things that shaped the timing, and that matter if this ever comes up
-again:
-
-- Fly bills volumes on **provisioned** size, not bytes used - 20GB costs
-  ~$3/month from the moment you extend, whether or not it's full. That is
-  why it was left until days before the party rather than done up front.
-- A volume can be **extended but never shrunk**, so this was one-way.
 
 ## Before the party: clear the test data
 
@@ -205,7 +131,7 @@ Carry on from `1.5.0`; don't "correct" it back up to the 1.9.x line.
 
 ## Secrets
 
-- `.env` (local) and `fly secrets` (per app) are the only place secrets
+- `.env` (local) and `wrangler secret put` (per Worker) are the only place secrets
   live - never in a committed file.
 - Production and QA have distinct `TOKEN_SECRET` and VAPID keys. The admin
   password is intentionally shared across environments for convenience.

@@ -1,5 +1,5 @@
 // Lost phone, owner edition (APP-LG-001): clears the owner's Face ID and signs
-// them out everywhere. Run on the server (fly ssh console), then sign in with
+// them out everywhere. Run on the server, then sign in with
 // the owner key (npm run admin-token) and add Face ID again on the new phone.
 import 'dotenv/config';
 import db from '../src/db.js';

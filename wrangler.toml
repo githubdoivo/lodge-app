@@ -1,7 +1,7 @@
 name = "lodge-demo"
 main = "src/worker.js"
 
-# The demo's own address (replaces the Fly app; APP-LG-026)
+# The demo's own address (APP-LG-026)
 routes = [{ pattern = "lodge-demo.appdoivo.com/*", zone_name = "appdoivo.com" }]
 compatibility_date = "2025-11-01"
 

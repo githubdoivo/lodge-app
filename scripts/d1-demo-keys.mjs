@@ -1,5 +1,5 @@
 // Re-hashes the demo keys in D1 lodge-demo with the Worker's own TOKEN_SECRET,
-// so the same demo keys as on Fly sign in on the Worker.
+// so the same demo keys as before sign in on the Worker.
 // One command, works from any folder:
 //   node ~/projects/lodge-app/scripts/d1-demo-keys.mjs --apply
 // The secret comes from the Keychain (service lodge-demo-token-secret); it is
