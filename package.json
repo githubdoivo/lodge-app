@@ -15,7 +15,7 @@
     "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true",
     "screenshots": "node --disable-warning=ExperimentalWarning scripts/screenshots.js",
     "reset-owner-faceid": "node --disable-warning=ExperimentalWarning scripts/reset-owner-faceid.js",
-    "deploy": "wrangler deploy"
+    "deploy": "npx wrangler deploy"
   },
   "engines": {
     "node": ">=23.4"
