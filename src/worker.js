@@ -6,6 +6,7 @@ import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
 import { addMemoRoutes } from './workerMemo.js';
+import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
 import { MOCK_NAMES, PRESET_ADMIN_NAME, DEMO_GUEST_NAME, generateDemoUserToken, tokenBase } from './demoUsers.js';
 
 const json = (body, status = 200) =>
@@ -217,6 +218,13 @@ const writes = {
       ? clean.options.map((label, i) => DB.prepare('INSERT INTO plaza_poll_options (post_id, label, position) VALUES (?, ?, ?)').bind(post.id, label, i))
       : clean.links.map((l, i) => DB.prepare('INSERT INTO plaza_link_items (post_id, emoji, label, url, position) VALUES (?, ?, ?, ?, ?)').bind(post.id, l.emoji, l.label, l.url, i));
     if (extra.length) await DB.batch(extra);
+    const bodyByType = {
+      poll: { pt: 'há uma nova sondagem na wall, vem votar.', en: 'there’s a new poll on the wall, come and vote.' },
+      links: { pt: 'há links novos na wall.', en: 'there are new links on the wall.' },
+      announcement: { pt: 'a organização deixou um novo anúncio na wall.', en: 'the hosts left a new announcement on the wall.' },
+    };
+    ctx.exec.waitUntil(broadcast(ctx.env, { title: { pt: 'wall', en: 'wall' }, body: bodyByType[type] || bodyByType.announcement,
+      tag: 'plaza-announcement', url: '/?tab=plaza' }));
     return json({ ok: true, id: post.id });
   },
   'PATCH /api/admin/plaza-posts/:id/pin': async (ctx) => {
@@ -337,6 +345,9 @@ writes['POST /api/admin/consequences/reveal'] = async (ctx) => {
     WHERE c.status = 'pending' ORDER BY RANDOM() LIMIT 1`).first();
   if (!pick) return json({ error: 'err_no_pending_consequences' }, 404);
   await ctx.env.DB.prepare(`UPDATE consequences SET status = 'used', revealed_at = ${now} WHERE id = ? AND status = 'pending'`).bind(pick.id).run();
+  ctx.exec.waitUntil(broadcast(ctx.env, { title: { pt: 'rata', en: 'rata' },
+    body: { pt: 'saiu uma nova consequência, abre a app para a veres.', en: 'a new consequence was drawn, open the app to see it.' },
+    tag: 'consequence', url: '/?tab=rata' }));
   return json({ ok: true, revealed: pick });
 };
 
@@ -478,6 +489,9 @@ writes['POST /api/chat/messages'] = async (ctx) => {
   }
   await DB.prepare('INSERT INTO messages (user_id, text, pseudonym) VALUES (?, ?, ?)').bind(ctx.user.id, text, pseudonym).run();
   await DB.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 15)').run();
+  ctx.exec.waitUntil(broadcast(ctx.env, { title: { pt: 'plaza', en: 'plaza' },
+    body: { pt: `${pseudonym} acabou de partilhar algo novo na plaza.`, en: `${pseudonym} just shared something new in the plaza.` },
+    tag: 'plaza-share', url: '/?tab=chat' }, { excludeUserId: ctx.user.id }));
   return json({ ok: true }, 201);
 };
 
@@ -605,7 +619,12 @@ writes['PATCH /api/admin/users/:id/admin'] = async (ctx) => {
     if (c <= 1) return json({ error: 'err_last_admin' }, 400);
   }
   await ctx.env.DB.prepare(`UPDATE users SET is_admin = ?, updated_at = ${now} WHERE id = ?`).bind(isAdmin ? 1 : 0, ctx.id).run();
-  return json({ ok: true, is_admin: isAdmin }); // the push to that person comes with the push card
+  ctx.exec.waitUntil(notifyUser(ctx.env, ctx.id, { title: { pt: 'lodgedoivo', en: 'lodgedoivo' },
+    body: isAdmin
+      ? { pt: 'agora és admin e tens acesso ao painel de administração.', en: 'you are an admin now and have access to the admin panel.' }
+      : { pt: 'já não és admin, mas continuas a ter acesso a tudo o resto.', en: 'you are no longer an admin, but you keep access to everything else.' },
+    url: '/settings.html' }));
+  return json({ ok: true, is_admin: isAdmin });
 };
 
 // ---- Key change, first-time key claim, wipes (APP-LG-017 slice 1) ----
@@ -683,6 +702,7 @@ const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login', '/a
 const getDyn = [];
 const writeDyn = [];
 addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
+addPushRoutes({ routes, writes, json });
 
 // Daily reset (cron trigger): the demo goes back to its starting state. People and
 // everything they wrote go (ON DELETE CASCADE), then the shared tables and the
@@ -709,11 +729,11 @@ export async function resetDemo(env) {
 
 export default {
   async scheduled(event, env, ctx) { ctx.waitUntil(resetDemo(env)); },
-  async fetch(request, env) {
+  async fetch(request, env, exec = { waitUntil: (p) => p.catch(() => {}) }) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     const path = url.pathname.replace(/\/+$/, '');
-    const ctx = { env, url, request };
+    const ctx = { env, url, request, exec };
     let handler, key, m;
     if (request.method === 'GET') {
       handler = routes[path]; key = path;

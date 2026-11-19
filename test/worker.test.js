@@ -485,3 +485,53 @@ test('daily demo reset: clears what visitors made, files included, and seeds the
   assert.equal(db.prepare('SELECT COUNT(*) n FROM users WHERE is_owner = 1').get().n, 1);
   assert.deepEqual(await resetDemo({ ...e, APP_ENV: 'prod' }), { skipped: true });
 });
+
+// ---- Push from the Worker (APP-LG-023) ----
+import { encryptPayload, broadcast } from '../src/workerPush.js';
+import { createECDH, hkdfSync, createDecipheriv as mkDecipher } from 'node:crypto';
+
+const b64u = (b) => Buffer.from(b).toString('base64url');
+
+test('push: payload encrypts so the browser key can read it (RFC 8291)', async () => {
+  const ua = createECDH('prime256v1'); ua.generateKeys();
+  const auth = Buffer.from('0123456789abcdef');
+  const sub = { endpoint: 'https://push.test/x', keys: { p256dh: b64u(ua.getPublicKey()), auth: b64u(auth) } };
+  const out = Buffer.from(await encryptPayload(sub, 'olá wall'));
+  const salt = out.subarray(0, 16), idlen = out[20], asPub = out.subarray(21, 21 + idlen), body = out.subarray(21 + idlen);
+  const secret = ua.computeSecret(asPub);
+  const prk = Buffer.from(hkdfSync('sha256', secret, auth, Buffer.concat([Buffer.from('WebPush: info\0'), ua.getPublicKey(), asPub]), 32));
+  const cek = Buffer.from(hkdfSync('sha256', prk, salt, 'Content-Encoding: aes128gcm\0', 16));
+  const nonce = Buffer.from(hkdfSync('sha256', prk, salt, 'Content-Encoding: nonce\0', 12));
+  const d = mkDecipher('aes-128-gcm', cek, nonce);
+  d.setAuthTag(body.subarray(-16));
+  const plain = Buffer.concat([d.update(body.subarray(0, -16)), d.final()]);
+  assert.equal(plain.subarray(0, -1).toString(), 'olá wall');
+  assert.equal(plain.at(-1), 2);
+});
+
+test('push: subscribe, send with a VAPID signature, drop expired, quiet without keys', async () => {
+  const ecdh = createECDH('prime256v1'); ecdh.generateKeys();
+  const e = { ...env, VAPID_PUBLIC_KEY: b64u(ecdh.getPublicKey()), VAPID_PRIVATE_KEY: b64u(ecdh.getPrivateKey()), VAPID_SUBJECT: 'mailto:t@test' };
+  const ua = createECDH('prime256v1'); ua.generateKeys();
+  const mk = (n) => ({ endpoint: `https://push.test/${n}`, keys: { p256dh: b64u(ua.getPublicKey()), auth: b64u(Buffer.alloc(16, 1)) } });
+  const count = () => testDb.prepare("SELECT count(*) c FROM push_subscriptions WHERE endpoint LIKE 'https://push.test/%'").get().c;
+  assert.equal((await send('POST', '/api/push/subscribe', 'ana-key', { subscription: { endpoint: 'x' } }, e)).status, 400);
+  assert.equal((await send('POST', '/api/push/subscribe', 'ana-key', { subscription: mk('ok') }, e)).status, 201);
+  assert.equal((await send('POST', '/api/push/subscribe', 'ana-key', { subscription: mk('ok') }, e)).status, 201); // twice: one row
+  await send('POST', '/api/push/subscribe', 'rui-key', { subscription: mk('gone') }, e);
+  assert.equal(count(), 2);
+  assert.equal((await (await get('/api/push/vapid-public-key', 'ana-key', e)).json()).enabled, true);
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { calls.push({ url, init }); return new Response(null, { status: url.endsWith('gone') ? 410 : 201 }); };
+  try {
+    assert.deepEqual(await broadcast(e, { title: 't', body: { pt: 'a', en: 'b' } }), { sent: 1, failed: 1 });
+    assert.match(calls[0].init.headers.Authorization, /^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=/);
+    assert.equal(count(), 1); // the expired one is gone
+    calls.length = 0;
+    assert.deepEqual(await broadcast(env, { title: 't' }), { sent: 0, failed: 0 }); // no keys: nothing sent
+    assert.equal(calls.length, 0);
+  } finally { globalThis.fetch = realFetch; }
+  await send('POST', '/api/push/unsubscribe', 'ana-key', { endpoint: 'https://push.test/ok' }, e);
+  assert.equal(count(), 0);
+});
