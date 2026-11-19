@@ -552,6 +552,49 @@ test('a request dropped at startup does not throw away the stored key', async ()
   await context.close();
 });
 
+// APP-LG-024: on iPhone, picking the passkey above the keyboard can also fill
+// the key field with the passkey's name and submit the form. That submit used
+// to clear the Face ID session the moment it was saved and show "invalid key".
+test('picking a passkey signs in even when the phone also submits the key form', async () => {
+  const context = await iphoneContext('iPhone 13');
+  await context.addInitScript((session) => {
+    const fakeCred = { id: 'cred', response: { clientDataJSON: new Uint8Array([1]).buffer, authenticatorData: new Uint8Array([2]).buffer, signature: new Uint8Array([3]).buffer } };
+    window.PublicKeyCredential = window.PublicKeyCredential || function PublicKeyCredential() {};
+    window.PublicKeyCredential.isConditionalMediationAvailable = async () => true;
+    let picked = false;
+    Object.defineProperty(navigator, 'credentials', { configurable: true, value: {
+      // Picked once; after the reload the suggestion just waits, as on a phone.
+      get: () => new Promise((resolve) => {
+        if (sessionStorage.getItem('picked')) return;
+        setTimeout(() => { sessionStorage.setItem('picked', '1'); picked = true; resolve(fakeCred); }, 300);
+      }),
+      create: async () => { throw new DOMException('no', 'NotAllowedError'); },
+    } });
+    const realFetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.includes('/api/auth/passkey/options')) return Promise.resolve(new Response(JSON.stringify({ challenge: 'AAAA', rpId: 'localhost' }), { headers: { 'content-type': 'application/json' } }));
+      if (url.includes('/api/auth/passkey/signin')) return Promise.resolve(new Response(JSON.stringify({ session }), { headers: { 'content-type': 'application/json' } }));
+      return realFetch(input, init);
+    };
+    // The phone's own submit lands right after the session is stored.
+    const realSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k, v) {
+      realSet.call(this, k, v);
+      if (picked && k === 'appivo_token' && v === session) {
+        picked = false;
+        document.getElementById('token-input').value = 'Playwright Passkey Name';
+        document.getElementById('login-form').requestSubmit();
+      }
+    };
+  }, ADMIN);
+  const page = await context.newPage();
+  await page.goto(base + '/');
+  await page.waitForSelector('#app:not(.hidden)', { timeout: WAIT_TIMEOUT });
+  assert.equal(await page.evaluate(() => localStorage.getItem('appivo_token')), ADMIN, 'the Face ID session must survive the extra submit');
+  await context.close();
+});
+
 /* --------------------- First-time key retrieval (register) --------------- */
 
 test('a first-time user can find their name, claim their key, and get logged straight in', async () => {

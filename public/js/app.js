@@ -390,9 +390,16 @@ wirePasswordToggle('token-input', 'token-toggle');
   }
 })();
 
+// Set once the phone hands back a passkey picked above the keyboard. iOS can
+// also fill the key field with that passkey's name and submit the form in the
+// same tap: that submit checked the name as a key ("invalid key") and its
+// clearToken() threw away the Face ID session just opened (APP-LG-024). While
+// a passkey sign-in runs, the key form stands aside.
+let passkeyPicked = false;
+
 $('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (findKeyMode) return;
+  if (findKeyMode || passkeyPicked) return;
   const token = $('token-input').value.trim();
   $('login-error').textContent = '';
   try {
@@ -412,7 +419,8 @@ $('login-form').addEventListener('submit', async (e) => {
       } else setToken(token);
     } else if (pj) {
       throw new Error(t(pj.error || 'err_token_invalid'));
-    } else setToken(token);
+    } else if (passkeyPicked) return;
+    else setToken(token);
     const me = await api('/me');
     // Naming the account before leaving the page is what lets iCloud
     // Keychain store a real username/key pair rather than a stray password
@@ -426,6 +434,7 @@ $('login-form').addEventListener('submit', async (e) => {
     // so the reload costs one request and changes nothing else.
     location.replace('/');
   } catch (err) {
+    if (passkeyPicked) return;   // the passkey's own sign-in decides, and owns the token
     clearToken();
     $('login-error').textContent = err.message;
   }
@@ -439,10 +448,13 @@ $('login-form').addEventListener('submit', async (e) => {
     if (!passkeySupported() || !(await PublicKeyCredential.isConditionalMediationAvailable?.())) return;
     const options = await api('/auth/passkey/options', { method: 'POST' });
     const credential = await usePasskey(options, 'conditional');
+    passkeyPicked = true;
+    $('login-error').textContent = '';
     const done = await api('/auth/passkey/signin', { method: 'POST', body: { credential } });
     setToken(done.session);
     location.replace('/');
   } catch (err) {
+    passkeyPicked = false;
     if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') $('login-error').textContent = err.message || t('err_passkey_failed');
   }
 })();
