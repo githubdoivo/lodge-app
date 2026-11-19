@@ -3372,15 +3372,14 @@ h1.brand-name { margin: 0; font-size: inherit; font-weight: inherit; }
 /* one row however many keys (the face id tryout makes three), so none drops below the screen */
 .demo-keys-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
 .demo-keys-help { font-size: 0.82rem; margin: 0 0 6px; }
-@media (pointer: coarse) and (orientation: portrait) and (max-width: 600px) {
-  #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover { padding-top: calc(var(--above) + 100lvh * .40); }
-}
+/* :not(.typing) on both: these :has() rules outrank #login.typing, so without it
+   the demo form stayed under the keyboard while the key was typed (APP-LG-028 r2) */
 @media (max-height: 700px) {
-  #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover { padding-top: calc(var(--above) + 100lvh * .30); }
+  #login:not(.hidden):not(.typing):has(#demo-keys:not(.hidden)) .cover { padding-top: calc(var(--above) + 100lvh * .30); }
 }
 /* Phones: the demo too stands under the cottage, not over its walls (APP-LG-028) */
 @media (pointer: coarse) and (orientation: portrait) and (max-width: 600px) {
-  #login:not(.hidden):has(#demo-keys:not(.hidden)) .cover {
+  #login:not(.hidden):not(.typing):has(#demo-keys:not(.hidden)) .cover {
     padding-top: min(calc(var(--above) + (100lvh + var(--below)) * .6), calc(var(--above) + 100lvh - var(--login-stack, 200px))); }
 }
 

@@ -183,6 +183,31 @@ test('the shared keys are on screen and one tap logs in, on a phone and a deskto
   } finally { await browser.close(); }
 });
 
+test('on the demo sign-in the key field and enter button stay above the keyboard while typing', async () => {
+  const { webkit, devices } = await import('playwright');
+  const browser = await webkit.launch();
+  try {
+    const iphone17Pro = { ...devices['iPhone 13 Pro'], viewport: { width: 402, height: 874 } };
+    for (const device of [iphone17Pro, devices['iPhone SE'], devices['iPhone 13 Pro Max']]) {
+      const page = await browser.newPage(device);
+      await page.goto(base.replace(/\/api$/, '/'), { waitUntil: 'networkidle' });
+      await page.locator('#demo-keys-list button').first().waitFor();
+      await page.tap('#token-input');
+      await page.waitForSelector('#login.typing');
+      await page.keyboard.type('abc');
+      const r = await page.evaluate(() => {
+        const box = (id) => document.getElementById(id).getBoundingClientRect();
+        return { field: box('token-input').top, button: box('login-submit-btn').bottom, height: innerHeight, typing: document.getElementById('login').classList.contains('typing') };
+      });
+      assert.ok(r.typing, 'typing a key must keep the form lifted');
+      assert.ok(r.field >= 0, `${JSON.stringify(device.viewport)}: key field above the screen ${JSON.stringify(r)}`);
+      // The iPhone keyboard plus its passkey bar covers a bit under half the screen.
+      assert.ok(r.button < r.height * 0.55, `${JSON.stringify(device.viewport)}: enter button behind the keyboard ${JSON.stringify(r)}`);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('a memo photo sent to the public demo is kept on the server only as the placeholder', async () => {
   const { demoMemoFile } = await import('../src/demo.js');
   const { writeFileSync, readFileSync } = await import('node:fs');
