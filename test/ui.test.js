@@ -630,6 +630,90 @@ test('picking a passkey signs in even when the phone also submits the key form',
   await context.close();
 });
 
+// APP-LG-024 round 2: the usual iPhone order is the other way round: the phone
+// fills the field and submits first, and Face ID hands the passkey back a
+// second or so later. "invalid key" must not show in between.
+function fakeLatePasskey(session, delay) {
+  return [(args) => {
+    const fakeCred = { id: 'cred', response: { clientDataJSON: new Uint8Array([1]).buffer, authenticatorData: new Uint8Array([2]).buffer, signature: new Uint8Array([3]).buffer } };
+    window.PublicKeyCredential = window.PublicKeyCredential || function PublicKeyCredential() {};
+    window.PublicKeyCredential.isConditionalMediationAvailable = async () => true;
+    window.__pick = () => new Promise((r) => setTimeout(r, args.delay)).then(() => window.__resolvePick(fakeCred));
+    Object.defineProperty(navigator, 'credentials', { configurable: true, value: {
+      get: () => new Promise((resolve) => { window.__resolvePick = resolve; }),
+      create: async () => { throw new DOMException('no', 'NotAllowedError'); },
+    } });
+    const realFetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.includes('/api/auth/passkey/options')) return Promise.resolve(new Response(JSON.stringify({ challenge: 'AAAA', rpId: 'localhost' }), { headers: { 'content-type': 'application/json' } }));
+      if (url.includes('/api/auth/passkey/signin')) return Promise.resolve(new Response(JSON.stringify({ session: args.session }), { headers: { 'content-type': 'application/json' } }));
+      return realFetch(input, init);
+    };
+  }, { session, delay }];
+}
+
+test('the phone submitting before Face ID answers shows no "invalid key" and still signs in', async () => {
+  const context = await iphoneContext('iPhone 13');
+  await context.addInitScript(...fakeLatePasskey(ADMIN, 1200));
+  const page = await context.newPage();
+  await page.goto(base + '/');
+  await page.waitForSelector('#login:not(.hidden)');
+  await page.waitForFunction(() => typeof window.__resolvePick === 'function');
+  // Autofill: the passkey name lands in the field and the form submits, no keys pressed.
+  await page.evaluate(() => {
+    document.getElementById('token-input').value = 'Playwright Passkey Name';
+    document.getElementById('login-form').requestSubmit();
+    window.__pick();
+  });
+  await page.waitForTimeout(600);
+  assert.equal(await page.textContent('#login-error'), '', 'no "invalid key" while Face ID is still opening');
+  await page.waitForSelector('#app:not(.hidden)', { timeout: WAIT_TIMEOUT });
+  assert.equal(await page.evaluate(() => localStorage.getItem('appivo_token')), ADMIN);
+  await context.close();
+});
+
+test('a wrong key typed by hand still says "invalid key" at once while Face ID waits', async () => {
+  const context = await iphoneContext('iPhone 13');
+  await context.addInitScript(...fakeLatePasskey(ADMIN, 1200));
+  const page = await context.newPage();
+  await page.goto(base + '/');
+  await page.waitForSelector('#login:not(.hidden)');
+  await page.waitForFunction(() => typeof window.__resolvePick === 'function');
+  await page.click('#token-input');
+  await page.keyboard.type('nope1234');
+  const started = Date.now();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.getElementById('login-error').textContent.trim() !== '', null, { timeout: WAIT_TIMEOUT });
+  assert.ok(Date.now() - started < 2500, 'a typed mistake must not wait for Face ID');
+  // Double submit: still one plain error, still on the sign-in screen.
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  assert.ok(await page.isVisible('#login'));
+  await context.close();
+});
+
+test('on a phone the key form moves up out of the keyboard while the field is focused', async () => {
+  for (const device of ['iPhone SE', 'iPhone 13', 'iPhone 13 Pro Max']) {
+    const context = await iphoneContext(device);
+    const page = await context.newPage();
+    await page.goto(base + '/');
+    await page.waitForSelector('#login:not(.hidden)');
+    await page.focus('#token-input');
+    await page.waitForSelector('#login.typing');
+    const { bottom, height } = await page.evaluate(() => ({
+      bottom: document.getElementById('login-submit-btn').getBoundingClientRect().bottom,
+      height: window.innerHeight,
+    }));
+    // The iPhone keyboard plus its passkey bar covers a bit under half the screen.
+    assert.ok(bottom < height * 0.55, `${device}: enter button at ${Math.round(bottom)} of ${height} would sit behind the keyboard`);
+    await page.evaluate(() => document.activeElement.blur());
+    await page.waitForSelector('#login:not(.typing)');
+    await context.close();
+  }
+});
+
 /* --------------------- First-time key retrieval (register) --------------- */
 
 test('a first-time user can find their name, claim their key, and get logged straight in', async () => {

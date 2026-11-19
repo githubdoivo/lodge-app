@@ -144,6 +144,9 @@ function keepLoginFieldVisible() {
   const field = document.activeElement;
   const typing = field && cover.contains(field) && field.matches('input');
   cover.style.setProperty('--keyboard', `${typing ? keyboard : 0}px`);
+  // APP-LG-024 r2: the scroll above did not lift it on the iPhone, so while a
+  // field is focused the form itself moves up to the sky (styles.css #login.typing).
+  $('login').classList.toggle('typing', !!typing);
   if (!typing) return;
   const over = $('login-submit-btn').getBoundingClientRect().bottom + 12 - visibleBottom;
   if (over > 0) cover.scrollTop += over;
@@ -396,6 +399,21 @@ wirePasswordToggle('token-input', 'token-toggle');
 // clearToken() threw away the Face ID session just opened (APP-LG-024). While
 // a passkey sign-in runs, the key form stands aside.
 let passkeyPicked = false;
+// Round 2: on the iPhone the phone's submit usually lands BEFORE Face ID hands
+// the passkey back, so the key check failed first and "invalid key" showed
+// while Face ID was still opening. While the passkey suggestion is waiting, a
+// rejected key waits a moment for it instead of showing the error at once.
+let passkeyListening = false;
+let passkeyLanded = null;        // resolves once a picked passkey hands back its credential
+let landPasskey = () => {};
+const PASSKEY_GRACE_MS = 4000;
+// A key typed by hand is never the phone's autofill: its mistakes show at once.
+let keyTyped = false;
+$('token-input').addEventListener('keydown', () => { keyTyped = true; });
+$('token-input').addEventListener('focus', () => { keyTyped = false; });
+const waitForPasskey = () => (passkeyListening && passkeyLanded && !keyTyped
+  ? Promise.race([passkeyLanded, new Promise((r) => setTimeout(() => r(false), PASSKEY_GRACE_MS))])
+  : Promise.resolve(false));
 
 $('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -418,6 +436,7 @@ $('login-form').addEventListener('submit', async (e) => {
         setToken(done.session);
       } else setToken(token);
     } else if (pj) {
+      if (pj.error === 'err_token_invalid' && await waitForPasskey()) return;   // Face ID is signing in
       throw new Error(t(pj.error || 'err_token_invalid'));
     } else if (passkeyPicked) return;
     else setToken(token);
@@ -443,21 +462,31 @@ $('login-form').addEventListener('submit', async (e) => {
 // Face ID sign-in (APP-LG-008): no button. The key field carries
 // autocomplete="... webauthn", so the phone suggests the passkey right above
 // the keyboard when the field is tapped; picking it signs in without a key.
-(async () => {
+// If a sign-in fails (say a passkey this demo no longer knows), the suggestion
+// is offered again so the next pick or a typed key still works.
+async function listenForPasskey() {
   try {
     if (!passkeySupported() || !(await PublicKeyCredential.isConditionalMediationAvailable?.())) return;
     const options = await api('/auth/passkey/options', { method: 'POST' });
+    passkeyLanded = new Promise((r) => { landPasskey = r; });
+    passkeyListening = true;
     const credential = await usePasskey(options, 'conditional');
     passkeyPicked = true;
+    landPasskey(true);
     $('login-error').textContent = '';
     const done = await api('/auth/passkey/signin', { method: 'POST', body: { credential } });
     setToken(done.session);
     location.replace('/');
   } catch (err) {
+    const failedSignIn = passkeyPicked;
     passkeyPicked = false;
+    passkeyListening = false;
+    landPasskey(false);
     if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') $('login-error').textContent = err.message || t('err_passkey_failed');
+    if (failedSignIn) setTimeout(listenForPasskey, 300);
   }
-})();
+}
+listenForPasskey();
 
 // First-time key retrieval: for someone who's never logged in, find their
 // own account by name (see GET /auth/unclaimed-users) and claim its key

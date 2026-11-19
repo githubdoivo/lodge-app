@@ -636,6 +636,10 @@ body:has(#login:not(.hidden)) { position: static; }
   #login:not(.hidden) .cover > .greeting { position: absolute; left: 0; right: 0; margin: 0; padding: 0 16px;
     top: calc(var(--above) + (100lvh + var(--below)) * .225 - 1.3rem); }
   #login:not(.hidden) .cover > .greeting { margin-top: 0; }
+  /* APP-LG-024 r2: while the key field is focused the keyboard covers the
+     grass, so the greeting and form move up into the sky, under the clock. */
+  #login.typing:not(.hidden) .cover { padding-top: calc(var(--above) + env(safe-area-inset-top) + 48px); }
+  #login.typing:not(.hidden) .cover > .greeting { position: static; padding: 0; }
 }
 
 /* Two beats instead of one run-on sentence - "bem-vinde" is the warm,
