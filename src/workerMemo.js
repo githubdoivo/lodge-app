@@ -11,6 +11,7 @@ const WINDOW_START_HOUR = 14; // 14:00 to 02:00 Lisbon time
 const WINDOW_END_HOUR = 2;
 const TZ = 'Europe/Lisbon';
 const REACTIONS = ['❤️', '💦', '👎'];
+import { makeZip } from './workerVotes.js';
 const RECAP_SECONDS_PER_PHOTO = 1;
 const EXT = {
   'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/heic': '.heic', 'image/heif': '.heif',
@@ -125,7 +126,7 @@ const fileFrom = async (request, kindOk) => {
   return { file };
 };
 
-export function addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now }) {
+export function addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly, now }) {
   const off = (ctx, day) => (available(ctx.env, ctx.user, day) ? null : json({ error: 'err_not_found' }, 404));
   const gate = async (ctx) => { const day = await todayOf(ctx.env); return { day, no: off(ctx, day) }; };
   const adminOn = (ctx) => (ctx.env.ENABLE_MEMO !== 'true' ? json({ error: 'err_not_found' }, 404) : adminOnly(ctx));
@@ -176,6 +177,45 @@ export function addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnl
     if (!results.length) return json({ error: 'err_memo_no_photos' }, 400);
     return json({ ids: results.map((r) => r.id), secondsPerPhoto: RECAP_SECONDS_PER_PHOTO });
   }]);
+
+  // Every upload of a day as one zip, files straight from R2 (same names as src/routes.js).
+  getDyn.push([/^\/api\/admin\/memo\/([\d-]+)\/uploads\.zip$/, async (ctx, m) => {
+    const no = adminOn(ctx); if (no) return no;
+    const { results } = await ctx.env.DB.prepare(`SELECT u.id, u.slot_id, u.file_path, u.mime_type, us.name AS user_name
+      FROM memo_uploads u JOIN users us ON us.id = u.user_id WHERE u.day = ? ORDER BY u.uploaded_at`).bind(m[1]).all();
+    if (!results.length) return json({ error: 'err_memo_no_uploads' }, 404);
+    const used = new Set(); const files = [];
+    for (const u of results) {
+      const obj = await ctx.env.FILES.get(u.file_path);
+      if (!obj) continue;
+      const ext = extFor(u.mime_type);
+      const base = u.user_name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '') || 'sem-nome';
+      let name = `${base}-momento${u.slot_id}${ext}`;
+      if (used.has(name)) name = `${base}-momento${u.slot_id}-${u.id}${ext}`;
+      used.add(name);
+      files.push({ name, data: new Uint8Array(await obj.arrayBuffer()) });
+    }
+    if (!files.length) return json({ error: 'err_memo_no_uploads' }, 404);
+    return new Response(makeZip(files), { headers: { 'content-type': 'application/zip',
+      'content-disposition': `attachment; filename="memo-${m[1]}.zip"`, 'cache-control': 'no-store' } });
+  }]);
+  // The video is made on the admin's phone, so nothing runs here: done once stored, else idle.
+  getDyn.push([/^\/api\/admin\/memo\/([\d-]+)\/recap\/status$/, async (ctx, m) => {
+    const no = adminOn(ctx); if (no) return no;
+    if (!(await ctx.env.DB.prepare('SELECT 1 AS x FROM memo_recaps WHERE day = ?').bind(m[1]).first())) return json({ status: 'idle' });
+    const { n } = await ctx.env.DB.prepare("SELECT COUNT(*) AS n FROM memo_uploads WHERE day = ? AND kind = 'photo'").bind(m[1]).first();
+    return json({ status: 'done', photoCount: n });
+  }]);
+  // Owner only: rows and the files in R2 go.
+  writes['POST /api/admin/memo/wipe'] = async (ctx) => {
+    const off = ownerOnly(ctx); if (off) return off;
+    const { results: a } = await ctx.env.DB.prepare('SELECT file_path FROM memo_uploads').all();
+    const { results: b } = await ctx.env.DB.prepare('SELECT file_path FROM memo_recaps').all();
+    const keys = [...a, ...b].map((r) => r.file_path);
+    await ctx.env.DB.batch([ctx.env.DB.prepare('DELETE FROM memo_uploads'), ctx.env.DB.prepare('DELETE FROM memo_recaps'), ctx.env.DB.prepare('DELETE FROM memo_slots')]);
+    for (let i = 0; i < keys.length; i += 1000) await ctx.env.FILES.delete(keys.slice(i, i + 1000));
+    return json({ ok: true });
+  };
 
   writes['POST /api/memo/slots/:id/upload'] = async (ctx) => {
     const { no } = await gate(ctx); if (no) return no;

@@ -204,6 +204,14 @@ const routes = {
     const { results } = await ctx.env.DB.prepare(REVEALED).all();
     return json({ consequences: results });
   },
+  '/api/admin/consequences': async (ctx) => {
+    const off = adminOnly(ctx); if (off) return off;
+    const { results } = await ctx.env.DB.prepare(`SELECT c.id, c.text, c.day, c.status, c.revealed_at, u.name AS author,
+        c.assigned_user_id, a.name AS assignedName, c.assigned_at, c.done_at, c.approved_at
+      FROM consequences c JOIN users u ON u.id = c.user_id LEFT JOIN users a ON a.id = c.assigned_user_id
+      ORDER BY COALESCE(c.revealed_at, c.created_at) DESC, c.id DESC`).all();
+    return json(results);
+  },
   '/api/users/basic': async (ctx) => {
     const { results } = await ctx.env.DB.prepare(
       'SELECT id, name FROM users WHERE id != ? ORDER BY name COLLATE NOCASE').bind(ctx.user.id).all();
@@ -782,7 +790,7 @@ const PUBLIC = new Set(['/api/version', '/api/demo', 'POST /api/auth/login', '/a
 // Routes with a path piece in them that is not a plain number (a day, or file routes).
 const getDyn = [];
 const writeDyn = [];
-addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, now });
+addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly, now });
 addVotesRoutes({ routes, writes, getDyn, writeDyn, json, adminOnly, ownerOnly });
 addPlazaRoutes({ routes, writeDyn, getDyn, json, adminOnly, ownerOnly, plazaOff, votingDay });
 addPushRoutes({ routes, writes, json });
