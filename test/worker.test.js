@@ -587,8 +587,8 @@ const fromIp = (ip, method, path, key, body) => worker.fetch(new Request('https:
 }), env);
 const tryKey = (ip, token) => fromIp(ip, 'POST', '/api/auth/login', null, { token });
 
-test('sign-in: the 11th wrong key in 15 minutes is a 429, even with the right key, and the window ends', async () => {
-  for (let i = 0; i < 10; i++) assert.equal((await tryKey('10.0.0.1', 'wrong' + i)).status, 401);
+test('sign-in: the 31st wrong key in 15 minutes is a 429, even with the right key, and the window ends', async () => {
+  for (let i = 0; i < 30; i++) assert.equal((await tryKey('10.0.0.1', 'wrong' + i)).status, 401);
   const r = await tryKey('10.0.0.1', 'wrong-again');
   assert.equal(r.status, 429);
   assert.equal((await r.json()).error, 'err_rate_limited');
@@ -612,7 +612,7 @@ test('sign-in: successful sign-ins and session tokens never use up the budget', 
 
 test('one budget: guessed keys in the header, wrong current keys and bad claims all count', async () => {
   const ip = '10.0.0.4';
-  for (let i = 0; i < 4; i++) assert.equal((await fromIp(ip, 'GET', '/api/me', 'guess' + i)).status, 401);
+  for (let i = 0; i < 24; i++) assert.equal((await fromIp(ip, 'GET', '/api/me', 'guess' + i)).status, 401);
   for (let i = 0; i < 3; i++) {
     assert.equal((await fromIp(ip, 'POST', '/api/me/change-token', 'ana-key', { currentToken: 'bad' + i, newToken: 'whatever12' })).status, 401);
   }

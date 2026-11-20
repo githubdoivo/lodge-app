@@ -6,7 +6,9 @@
 // so a right guess during the lock-out tells the guesser nothing.
 // The table is made here on first use: D1 migrations are not run by the deploy.
 export const WINDOW_MS = 15 * 60 * 1000;
-export const MAX_FAILS = 10;
+// 30 wrong keys per address per 15 minutes (Ivo, 20 Nov 2026): a guest's key is name + 6 digits, so a
+// guesser still needs ~170 days on average, while one guest's typos rarely lock out the house Wi-Fi.
+export const MAX_FAILS = 30;
 
 const ready = new WeakSet(); // the D1 bindings whose table is known to exist
 const ensureTable = async (DB) => {

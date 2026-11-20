@@ -3469,7 +3469,7 @@ test('the owner can wipe each feature independently - only that feature\'s data 
 
 test('guessing tokens against a non-login endpoint is rate-limited too, not just /auth/login', async () => {
   let lastStatus;
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 32; i++) {
     const r = await api('GET', '/me', { token: `guess-${i}-does-not-exist` });
     lastStatus = r.status;
   }
@@ -3766,7 +3766,7 @@ test('the change-key form cannot be used to test other people\'s keys: taken key
   const probe = await api('POST', '/admin/users', { token: ADMIN, body: { name: "Prober" } });
   const target = await api('POST', '/admin/users', { token: ADMIN, body: { name: "Target" } });
   let last;
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 32; i++) {
     last = await api('POST', '/me/change-token', { token: probe.data.token, body: { currentToken: probe.data.token, newToken: target.data.token } });
     if (last.status === 429) break;
   }

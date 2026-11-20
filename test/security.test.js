@@ -95,7 +95,7 @@ test('access: forged, empty and look-alike keys are refused, and guessing hits t
     assert.ok([401, 429].includes(res.status), `${JSON.stringify(t)} -> ${res.status}`);
   }
   let last;
-  for (let i = 0; i < 12; i++) last = await call('POST', '/auth/login', { body: { token: `nobody${i}` } });
+  for (let i = 0; i < 32; i++) last = await call('POST', '/auth/login', { body: { token: `nobody${i}` } });
   assert.equal(last.status, 429);
   resetAuthAttempts();
 });
