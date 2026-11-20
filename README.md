@@ -163,8 +163,8 @@ Every feature notifies the group when something happens - a new Wall post,
 a revealed consequence, Snatch registration/voting opening or closing and
 results being revealed, or a new Plaza post (skipping the poster's own
 device). Each notification opens the app straight to the relevant tab. See
-`broadcast(` calls in `src/consequences.js`, `src/routes.js`, and
-`src/push.js` for the exact copy.
+`broadcast(` calls in `src/worker.js`, `src/workerVotes.js`, and
+`src/workerMemo.js` for the exact copy.
 
 - Android/Chrome: just tap the notifications button inside the app.
 - iPhone (iOS 16.4+): first use "Add to Home Screen" (Share > Add to Home

@@ -13,12 +13,12 @@ Never commit straight to `main`.
 
 ## Environments
 
-- **Production** (`appdoivo`, https://lodge.appdoivo.com) - the real app, real data,
-  persistent volume. Only ever deployed from `main`. Suspended between parties.
-- **Demo** (`lodge-demo`, https://lodge-demo.appdoivo.com) - public, for
-  anyone to try (the README links it). Mock data only, `DEMO_MODE=true` (see
-  `src/demo.js`), no volume, stops when idle. Deployed from `main` with
-  `scripts/deploy.sh demo`, using `FLY_API_TOKEN_DEMO` from `.env`.
+- **Production** (Worker `lodge`, https://lodge.appdoivo.com) - the real app, real data in
+  D1 `lodge` and R2 `lodge-files` (EU). Config `wrangler.prod.toml`; deployed from `main` with
+  `npx wrangler deploy --config wrangler.prod.toml` (`~/bin/ship` does both apps).
+- **Demo** (Worker `lodge-demo`, https://lodge-demo.appdoivo.com) - public, for
+  anyone to try (the README links it). Sample data only, `APP_ENV=demo` (the demo guard in
+  `src/worker.js`), wiped every night at 04:00 UTC. Config `wrangler.toml`; `npm run deploy`.
 
 Databases are intentionally isolated between the two. There is no QA copy any
 more (removed 2026-11-16, APP-LG-003): changes are tested by `npm test`, then

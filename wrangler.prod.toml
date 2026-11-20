@@ -36,3 +36,7 @@ jurisdiction = "eu"
 [observability]
 enabled = true
 head_sampling_rate = 1
+
+# Every minute: Rata reveals at 14, 17, 20, 23 and 02 h, and Memo moments (src/worker.js runTimedJobs)
+[triggers]
+crons = ["* * * * *"]

@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -39,20 +39,17 @@ process.env.DB_FILE = DB;
 // These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
 process.env.ADMIN_PASSKEY = 'off';
 process.env.ADMIN_NAME = 'Test Admin';
-process.env.ENABLE_ADMIN_PROMOTION = 'true';
-process.env.ENABLE_PLAZA = 'true';
-process.env.ENABLE_MEMO = 'true';
 
-const { default: app, seedResult } = await import('../src/app.js');
-const { default: db } = await import('../src/db.js');
-const { MEMO_DIR, MEMO_MIN_GAP_MINUTES, ensureTodaysSlots, zonedTimeToUtc } = await import('../src/memo.js');
+const { startWorker } = await import('./harness.js');
+const w = await startWorker({ ownerName: 'Test Admin' });
+const { db } = w;
+const { setMemoClock, ensureSlots, todayOf, zonedToUtc, REACTIONS } = await import('../src/workerMemo.js');
+const { MEMO_MIN_GAP_MINUTES, MEMO_SLOTS_PER_DAY, memoClock } = await import('./memoClock.js');
 const { renderDedications, newDedicationsDocument } = await import('../src/dedicationsPdf.js');
-const { translationsFor, queue, pending, markOk, markFailed, wipeFor, MAX_ATTEMPTS } =
-  await import('../src/translations.js');
-const { detectLang, isConfigured, interpretResponse, backfill, systemPromptFor } = await import('../src/translate.js');
-const { today, setClockForTests, now, getTimezone } = await import('../src/time.js');
+const { detectLang, interpretResponse, systemPromptFor } = await import('../src/translateCore.js');
+const { today, setClockForTests, now, getTimezone, ensureTodaysSlots, zonedTimeToUtc } = memoClock(w);
 
-const ADMIN = seedResult.token;
+const ADMIN = w.ownerKey;
 let server;
 let base;
 let userToken;
@@ -60,20 +57,12 @@ let userId;
 let contestantId;
 
 before(async () => {
-  server = app.listen(0);
-  await once(server, 'listening');
-  base = `http://127.0.0.1:${server.address().port}/api`;
+  base = `${w.base}/api`;
 });
 
-after(() => {
-  server?.close();
-  for (const ext of ['', '-wal', '-shm']) {
-    try { rmSync(DB + ext); } catch { /* ignore */ }
-  }
-  // MEMO_DIR sits next to DB_FILE (see memo.js) - same temp-file lifecycle,
-  // cleaned up the same way.
-  try { rmSync(MEMO_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
-});
+after(async () => { await w.close(); });
+// Each test starts with a clean key-guessing budget, so earlier failures cannot tip it into a 429.
+beforeEach(() => { try { db.exec('DELETE FROM auth_attempts'); } catch { /* not made yet */ } });
 
 async function api(method, path, { token, body } = {}) {
   const res = await fetch(base + path, {
@@ -142,11 +131,12 @@ function readZipEntries(buffer) {
 
 /* -------------------------------- Version --------------------------------- */
 
-test('GET /version is public and reports env: null when APP_ENV is unset (prod default)', async () => {
+test('GET /version is public and reports which app this is (APP_ENV)', async () => {
   const r = await api('GET', '/version');
   assert.equal(r.status, 200);
   assert.ok(r.data.version);
-  assert.equal(r.data.env, null);
+  assert.equal(r.data.env, w.env.APP_ENV);
+  assert.equal(r.data.runtime, 'worker');
 });
 
 test('every response carries the security headers: own scripts only, no framing, no sniffing', async () => {
@@ -184,106 +174,6 @@ test('login accepts the admin', async () => {
   const r = await api('POST', '/auth/login', { body: { token: ADMIN } });
   assert.equal(r.status, 200);
   assert.equal(r.data.isAdmin, true);
-});
-
-// Regression: there used to be a "mossy" magic token that resolved to the
-// owner account. It was originally gated by NODE_ENV!=='production' alone
-// and was confirmed live on prod on 2026-08-08 despite fly.toml setting
-// NODE_ENV=production, letting anyone who read this repo's own docs log in
-// with full owner rights, in every environment. It is back, but only as a
-// QA convenience and only under two conditions at once - see devLoginOwner()
-// in auth.js. These tests pin both halves: that it works where it is meant
-// to, and that no single misconfiguration is enough to open it elsewhere.
-// Exercised against auth.js directly rather than over HTTP: every rejected
-// login spends one of a 10-per-IP budget shared with the rest of the file
-// (see rateLimit.js), and a matrix of environment combinations would empty
-// it and tip later tests into 429s. The HTTP wiring gets one happy path
-// below, which is the part a unit call can't prove.
-test('the QA dev key needs both of its conditions - neither one alone unlocks anything', async () => {
-  const { isDevLoginKey, findUserByToken } = await import('../src/auth.js');
-  const original = { key: process.env.DEV_LOGIN_KEY, env: process.env.APP_ENV };
-  try {
-    // Nothing set at all: the shape production ships in.
-    delete process.env.DEV_LOGIN_KEY;
-    delete process.env.APP_ENV;
-    assert.equal(isDevLoginKey('mossy'), false);
-    assert.ok(!findUserByToken('mossy'), 'no passphrase resolves to a user by default');
-
-    // The passphrase without the environment - a secret copied to the wrong
-    // Fly app by mistake has to stay inert.
-    process.env.DEV_LOGIN_KEY = 'mossy';
-    for (const env of [undefined, 'prod', 'production', 'QA', 'staging', '']) {
-      if (env === undefined) delete process.env.APP_ENV;
-      else process.env.APP_ENV = env;
-      assert.equal(isDevLoginKey('mossy'), false, `APP_ENV=${env} must not unlock the dev key`);
-    }
-
-    // The environment without the passphrase - QA before the secret is set.
-    process.env.APP_ENV = 'qa';
-    for (const key of [undefined, '']) {
-      if (key === undefined) delete process.env.DEV_LOGIN_KEY;
-      else process.env.DEV_LOGIN_KEY = key;
-      assert.equal(isDevLoginKey('mossy'), false, 'an unset key is not an empty-string key');
-      assert.equal(isDevLoginKey(''), false, 'and an empty guess never matches');
-    }
-
-    // Both together, and only the right word.
-    process.env.DEV_LOGIN_KEY = 'mossy';
-    assert.equal(isDevLoginKey('mossy'), true);
-    assert.equal(isDevLoginKey('MOSSY'), true, 'case-insensitive, like every other key');
-    assert.equal(isDevLoginKey('mossyy'), false);
-    assert.equal(isDevLoginKey('moss'), false);
-
-    // The old flag is dead and stays dead.
-    process.env.ENABLE_DEV_LOGIN = 'true';
-    delete process.env.DEV_LOGIN_KEY;
-    assert.equal(isDevLoginKey('mossy'), false, 'the removed dev-login flag must have no effect at all');
-  } finally {
-    delete process.env.ENABLE_DEV_LOGIN;
-    if (original.key === undefined) delete process.env.DEV_LOGIN_KEY;
-    else process.env.DEV_LOGIN_KEY = original.key;
-    if (original.env === undefined) delete process.env.APP_ENV;
-    else process.env.APP_ENV = original.env;
-  }
-});
-
-test('on QA the dev key carries a whole session, without ever becoming the owner\'s real key', async () => {
-  const { default: db } = await import('../src/db.js');
-  process.env.DEV_LOGIN_KEY = 'mossy';
-  process.env.APP_ENV = 'qa';
-  try {
-    const login = await api('POST', '/auth/login', { body: { token: 'MOSSY' } });
-    assert.equal(login.status, 200);
-    assert.equal(login.data.isAdmin, true);
-
-    // It has to carry real requests too, not just the login check - the
-    // client replays whatever was typed as its bearer token from here on.
-    const me = await api('GET', '/me', { token: 'mossy' });
-    assert.equal(me.status, 200);
-    assert.equal(me.data.isOwner, true);
-
-    // The owner's stored key is untouched, and is not this.
-    const owner = db.prepare('SELECT token_hash, key_claimed_at FROM users WHERE is_owner = 1').get();
-    const { hashToken } = await import('../src/tokens.js');
-    assert.notEqual(owner.token_hash, hashToken('mossy'), "the owner's real key must stay a generated one");
-
-    // /me reports that generated key, not the word that was typed - the
-    // account card reads this, and used to show "mossy" while Manage Users
-    // showed the real one, so the two disagreed about the same account.
-    assert.notEqual(me.data.key, 'mossy', 'the dev word is a way in, not the account key');
-    assert.equal(hashToken(me.data.key), owner.token_hash, "/me should report the owner's own stored key");
-
-    // And it must not claim the owner's key on their behalf: doing so drops
-    // them out of the first-time name-search flow, which is how the owner
-    // got locked out of QA once already.
-    db.prepare('UPDATE users SET key_claimed_at = NULL WHERE is_owner = 1').run();
-    await api('GET', '/me', { token: 'mossy' });
-    const after = db.prepare('SELECT key_claimed_at FROM users WHERE is_owner = 1').get();
-    assert.equal(after.key_claimed_at, null, 'the dev key proves nothing, so it must not stamp a claim');
-  } finally {
-    delete process.env.DEV_LOGIN_KEY;
-    delete process.env.APP_ENV;
-  }
 });
 
 /* ----------------------------- Permissions ------------------------------- */
@@ -344,29 +234,20 @@ test('logging in for real also closes the first-time key retrieval, even without
 // later test expecting a plain 401 into a 429. The HTTP wiring itself is
 // already covered by the brand-new-user test above.
 test('the owner is searchable in the first-time key flow like anyone else, and claiming is still one-shot', async () => {
-  const { default: db } = await import('../src/db.js');
-  const { searchUnclaimedUsers, claimKey } = await import('../src/keyClaim.js');
   const owner = db.prepare('SELECT id, name FROM users WHERE is_owner = 1').get();
-  // Already claimed by now (every earlier test authenticates as ADMIN, and
-  // authenticate() stamps key_claimed_at on first use) - clear it to get a
-  // freshly-seeded owner back.
   db.prepare('UPDATE users SET key_claimed_at = NULL WHERE id = ?').run(owner.id);
-
+  const search = async () => (await api('GET', '/auth/unclaimed-users?name=test')).data.users;
+  const claim = async () => (await api('POST', '/auth/claim-key', { body: { userId: owner.id } }));
   try {
-    assert.ok(
-      searchUnclaimedUsers('test').some((u) => u.id === owner.id),
-      'the owner must not be filtered out of the search'
-    );
-
-    const claimed = claimKey(owner.id);
-    assert.equal(claimed.ok, true);
-    assert.equal(claimed.name, owner.name);
-    assert.ok(claimed.token, 'the flow hands back the real key');
-
-    assert.equal(claimKey(owner.id).error, 'err_key_already_claimed', 'claiming closes permanently, owner included');
-    assert.ok(!searchUnclaimedUsers('test').some((u) => u.id === owner.id), 'and they drop out of the search');
+    assert.ok((await search()).some((u) => u.id === owner.id), 'the owner must not be filtered out of the search');
+    const claimed = await claim();
+    assert.equal(claimed.data.ok, true);
+    assert.equal(claimed.data.name, owner.name);
+    assert.ok(claimed.data.token, 'the flow hands back the real key');
+    assert.equal((await claim()).data.error, 'err_key_already_claimed', 'claiming closes permanently, owner included');
+    assert.ok(!(await search()).some((u) => u.id === owner.id), 'and they drop out of the search');
   } finally {
-    db.prepare("UPDATE users SET key_claimed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?").run(owner.id);
+    db.prepare("UPDATE users SET key_claimed_at = datetime('now') WHERE id = ?").run(owner.id);
   }
 });
 
@@ -2125,7 +2006,7 @@ test('a user can change their own access key, given the correct current one', as
 // one must be refused. It is - the existing test below covers the plain
 // case. These are the ways round it that nobody had checked.
 test('a key cannot be taken by changing its case, or by two people at once', async () => {
-  (await import('../src/rateLimit.js')).resetAuthAttempts();
+  db.exec('DELETE FROM auth_attempts');
   const ana = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Collision Ana' } });
   const bruno = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Collision Bruno' } });
 
@@ -2168,7 +2049,7 @@ test('a key cannot be taken by changing its case, or by two people at once', asy
 });
 
 test('changing to a key that already belongs to someone else is rejected', async () => {
-  (await import('../src/rateLimit.js')).resetAuthAttempts();
+  db.exec('DELETE FROM auth_attempts');
   const a = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'KeyOwnerA' } });
   const b = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'KeyOwnerB' } });
 
@@ -2524,7 +2405,7 @@ test('Plaza posts: only the owner can delete, and deleting one leaves the rest o
 });
 
 test('Plaza is gated behind ENABLE_PLAZA - disabled means every endpoint 404s', async () => {
-  process.env.ENABLE_PLAZA = 'false';
+  w.env.ENABLE_PLAZA = 'false';
   try {
     const read = await api('GET', '/plaza-posts', { token: userToken });
     assert.equal(read.status, 404);
@@ -2538,7 +2419,7 @@ test('Plaza is gated behind ENABLE_PLAZA - disabled means every endpoint 404s', 
     const pin = await api('PATCH', '/admin/plaza-posts/1/pin', { token: ADMIN, body: { pinned: true } });
     assert.equal(pin.status, 404);
   } finally {
-    process.env.ENABLE_PLAZA = 'true';
+    w.env.ENABLE_PLAZA = 'true';
   }
 });
 
@@ -2558,28 +2439,6 @@ function fakeTranslation(entityType, entityId, field, lang, text) {
     ON CONFLICT(entity_type, entity_id, field, lang) DO UPDATE SET text = excluded.text, status = 'ok'
   `).run(entityType, entityId, field, lang, text);
 }
-
-test('with no API key the app behaves exactly as it did before translations existed', async () => {
-  // The key is pinned empty at the top of this file, so this is the same
-  // state as a deploy before the secret is set - and the assertion is that
-  // the app is fine in it, not that the developer happens to lack a key.
-  // It read as the latter until a real key landed in .env and this test
-  // started failing for being true about the wrong thing.
-  assert.equal(isConfigured(), false, 'the suite must never reach the real API');
-
-  const posted = await api('POST', '/admin/plaza-posts', {
-    token: ADMIN,
-    body: { type: 'announcement', text: 'jantar às oito' },
-  });
-  assert.equal(posted.status, 200);
-
-  const { data } = await api('GET', '/plaza-posts?lang=en', { token: userToken });
-  const post = data.posts.find((p) => p.id === posted.data.id);
-  assert.equal(post.text, 'jantar às oito', 'the original must be shown when nothing was translated');
-  assert.equal(post.originalText, undefined, 'with no translation there is nothing to toggle to');
-
-  await api('POST', '/admin/plaza-posts/wipe', { token: ADMIN });
-});
 
 test('a reader gets their own language, and the original travels with it', async () => {
   const posted = await api('POST', '/admin/plaza-posts', {
@@ -2687,28 +2546,6 @@ test('a Rata consequence reads in the language you picked, and editing a post dr
   await api('DELETE', `/admin/users/${suggester.data.id}`, { token: ADMIN });
 });
 
-test('a translation that keeps failing is given up on rather than retried forever', async () => {
-  queue('consequence', 4242, 'text', 'pt');
-  // A generous limit rather than the default page: pending() is paginated
-  // (one pass is one batch), and with seeded content now queued too this
-  // row sits well past the first page. The test is about giving up after
-  // MAX_ATTEMPTS, not about where the row lands in a queue.
-  const queued = pending(1000).filter((r) => r.entity_id === 4242);
-  assert.equal(queued.length, 1, 'only the language it was not written in gets queued');
-  assert.equal(queued[0].lang, 'en');
-
-  for (let i = 0; i < MAX_ATTEMPTS; i += 1) markFailed(queued[0].id);
-  assert.equal(pending(1000).filter((r) => r.entity_id === 4242).length, 0,
-    `a row must stop being retried after ${MAX_ATTEMPTS} attempts - this runs against a paid API`);
-
-  // And a failed row is never shown: the reader sees the original instead.
-  assert.equal(translationsFor('consequence', [4242], 'en').size, 0);
-
-  markOk(queued[0].id, 'drink water');
-  assert.equal(translationsFor('consequence', [4242], 'en').get('consequence:4242:text'), 'drink water');
-  wipeFor('consequence', 4242);
-});
-
 test('Plaza chat translates too, and a wipe takes its translations with it', async () => {
   await api('POST', '/admin/chat/wipe', { token: ADMIN });
   const posted = await api('POST', '/chat/messages', { token: userToken, body: { text: 'o jantar é às oito' } });
@@ -2731,128 +2568,6 @@ test('Plaza chat translates too, and a wipe takes its translations with it', asy
     0,
     'chat translations must go when the chat does',
   );
-});
-
-test('content written before translations existed can be picked up by a backfill', async () => {
-  // Queueing happens on write, so a month of real posts and consequences on
-  // production had no rows at all and read as "translations are broken".
-  // This is the catch-up, and it has to be safe to run twice.
-  db.prepare('DELETE FROM translations').run();
-  db.prepare('DELETE FROM consequences').run();
-  const u = db.prepare('SELECT id FROM users LIMIT 1').get().id;
-  db.prepare("INSERT INTO consequences (user_id, text, day, status) VALUES (?, 'dançar em cima da mesa', ?, 'used')").run(u, '2026-08-09');
-
-  const first = backfill();
-  assert.ok(first > 0, 'the backfill found nothing to queue');
-  const queued = db.prepare("SELECT lang FROM translations WHERE entity_type = 'consequence'").all();
-  assert.equal(queued.length, 1, 'only the language it was not written in should be queued');
-  assert.equal(queued[0].lang, 'en');
-
-  // Running it again must be a no-op rather than piling up duplicates or
-  // reviving a translation that already used up its attempts.
-  const second = backfill();
-  assert.equal(second, 0, 'a second backfill should find nothing left to do');
-
-  db.prepare('DELETE FROM consequences').run();
-  db.prepare('DELETE FROM translations').run();
-});
-
-test('the app caps its own API spending per day, and stops cleanly when it runs out', async () => {
-  // Belt to the console spend limit's braces. The bug that emptied the
-  // account on 16 Sept 2026 is fixed and tested; this is for the next one,
-  // and it fails in the direction the app already handles - a spent budget
-  // behaves exactly like no API key at all, which means originals are shown
-  // and nothing breaks.
-  //
-  // The budget is counted in the settings table rather than in memory,
-  // because a crash-loop that forgot its own spending is precisely how this
-  // would go wrong a second time.
-  const { callsUsedToday } = await import('../src/translate.js');
-  const { setSetting, getSetting } = await import('../src/db.js');
-  const key = `translation_calls_${new Date().toISOString().slice(0, 10)}`;
-  const before = getSetting(key, null);
-  try {
-    // Nothing in this suite has a key configured, so no call can leave the
-    // box - what is asserted is the accounting, not the network.
-    setSetting(key, '7');
-    assert.equal(callsUsedToday(), 7, 'the budget has to be readable back, and per-day');
-
-    // A day with no spending yet reads zero rather than throwing.
-    setSetting(key, '0');
-    assert.equal(callsUsedToday(), 0);
-
-    // And a junk value must not read as "unlimited".
-    setSetting(key, 'not a number');
-    assert.equal(callsUsedToday(), 0, 'an unparseable counter must read as zero, never as infinity');
-  } finally {
-    if (before === null) setSetting(key, '0'); else setSetting(key, before);
-  }
-});
-
-test('re-queueing unchanged text buys nothing, and only a real edit pays again', async () => {
-  // This one emptied Ivo's API credits on 16 Sept 2026, so it is worth
-  // stating what went wrong rather than only asserting the fix.
-  //
-  // queue() used to reset every re-queued row to pending with attempts back
-  // to zero - which reads as "this was edited, translate it again". Correct
-  // for an edit; expensive nonsense for anything else, because re-queueing
-  // an unchanged sentence discarded a finished translation and bought it
-  // again. seedDemo re-queues its whole demo set on every boot, and QA has
-  // SEED_DEMO=true, so that happened on every single deploy.
-  //
-  // What tells the two cases apart is a hash of the source text. Nothing
-  // here calls the API - the count of rows left pending IS the bill.
-  const store = await import('../src/translations.js');
-  const TEXT = 'o jantar e as nove, tragam uma toalha';
-
-  // Five boots of identical content.
-  for (let boot = 0; boot < 5; boot++) {
-    store.queue('plaza_post', 90210, 'text', 'pt', TEXT);
-  }
-  const afterBoots = store.pending(1000).filter((r) => r.entity_id === 90210);
-  assert.equal(afterBoots.length, 1, 'five identical boots must queue one translation, not five');
-
-  // Once it has been paid for, booting again must not buy it a second time.
-  for (const row of afterBoots) store.markOk(row.id, 'dinner is at nine, bring a towel');
-  store.queue('plaza_post', 90210, 'text', 'pt', TEXT);
-  assert.equal(
-    store.pending(1000).filter((r) => r.entity_id === 90210).length, 0,
-    'a finished translation must survive a re-queue of the same text',
-  );
-
-  // A genuine edit is still worth paying for - the whole feature depends on
-  // a stale translation being thrown away.
-  store.queue('plaza_post', 90210, 'text', 'pt', `${TEXT} e chinelos`);
-  assert.equal(
-    store.pending(1000).filter((r) => r.entity_id === 90210).length, 1,
-    'editing the text must re-queue it',
-  );
-
-  // A permanent failure must not come back on every later write either -
-  // retrying something already given up on is the same bill in slow motion.
-  for (const row of store.pending(1000).filter((r) => r.entity_id === 90210)) store.markFailed(row.id);
-  for (const row of store.pending(1000).filter((r) => r.entity_id === 90210)) store.markFailed(row.id);
-  store.queue('plaza_post', 90210, 'text', 'pt', `${TEXT} e chinelos`);
-  assert.equal(
-    store.pending(1000).filter((r) => r.entity_id === 90210).length, 0,
-    'a row already given up on must not be retried by the next unrelated write',
-  );
-});
-
-test('only one translation sweep runs at a time, however many writes land together', async () => {
-  // The multiplier on the same incident. Every write fired
-  // setImmediate(runPending), and every sweep read the WHOLE pending queue
-  // with nothing marking a row as in flight - so N writes arriving together
-  // produced N overlapping sweeps that each translated the same rows.
-  // seedDemo writes about nineteen things at once, which is how nineteen
-  // sentences became hundreds of API calls per boot.
-  const { runPending } = await import('../src/translate.js');
-  // With no key configured every call returns 0 immediately, which is enough
-  // to prove the guard: what is asserted is that concurrent calls do not all
-  // enter the sweep, not what the sweep would have done.
-  const results = await Promise.all(Array.from({ length: 10 }, () => runPending()));
-  assert.equal(results.length, 10);
-  assert.ok(results.every((n) => n === 0), 'with no API key nothing is spent, whatever the concurrency');
 });
 
 test('the translator is told, in detail, that portuguese means portugal', async () => {
@@ -2994,10 +2709,10 @@ test('the language of a message is detected rather than assumed from the app lan
 // say what time it is, rather than inheriting whatever hour the suite
 // happened to start at - otherwise the whole file is green by day and red
 // to whoever is still working at 3am.
-function atClock(at, fn) {
+async function atClock(at, fn) {
   const restore = setClockForTests(at);
   try {
-    return fn();
+    return await fn();
   } finally {
     restore();
   }
@@ -3036,9 +2751,9 @@ function memoAfternoon() {
 // 02:00 and 06:00. Every test downstream of here indexes into slots[0..3]
 // and would fail on an hour rather than on a regression. Rebuilding at a
 // pinned afternoon is what keeps the rest of the file honest at any hour.
-function resetSchedule() {
+async function resetSchedule() {
   db.prepare('DELETE FROM memo_slots').run();
-  atClock(memoAfternoon(), ensureTodaysSlots);
+  await atClock(memoAfternoon(), ensureTodaysSlots);
 }
 
 // Reads the slots back as epoch ms, with the window they were meant to fall
@@ -3111,7 +2826,6 @@ const WINDOW_OPENS = Date.parse('2026-09-18T14:00:00+01:00');
 const WINDOW_SHUTS = Date.parse('2026-09-19T02:00:00+01:00');
 
 test('between 02:00 and 06:00 no schedule is generated at all, rather than one in the small hours', async () => {
-  const { ensureTodaysSlots } = await import('../src/memo.js');
 
   // 04:00 sits in the gap between Memo's window shutting (02:00) and the
   // app's day rolling over (06:00), so today() still names the 17th - a day
@@ -3119,20 +2833,19 @@ test('between 02:00 and 06:00 no schedule is generated at all, rather than one i
   // anyway, starting from right now, which meant five notifications fired
   // between 04:00 and 07:00 for a night that was already over.
   db.prepare('DELETE FROM memo_slots').run();
-  atClock('2026-09-18T04:00:00+01:00', () => {
+  await atClock('2026-09-18T04:00:00+01:00', async () => {
     assert.equal(today(), '2026-09-17', 'before the 06:00 rollover, today() is still the day before');
-    ensureTodaysSlots();
+    await ensureTodaysSlots();
     assert.deepEqual(generatedSlots(), [], 'the window has shut - there is nothing left to schedule today');
   });
-  resetSchedule();
+  await resetSchedule();
 });
 
 test('every generated slot lands inside the 14:00-02:00 window, never past the end of it', async () => {
-  const { ensureTodaysSlots, MEMO_SLOTS_PER_DAY } = await import('../src/memo.js');
 
   db.prepare('DELETE FROM memo_slots').run();
-  atClock('2026-09-18T14:00:00+01:00', () => {
-    ensureTodaysSlots();
+  await atClock('2026-09-18T14:00:00+01:00', async () => {
+    await ensureTodaysSlots();
     const slots = generatedSlots();
     assert.equal(slots.length, MEMO_SLOTS_PER_DAY, 'a full window fits the whole day of moments');
     for (const slot of slots) {
@@ -3142,11 +2855,10 @@ test('every generated slot lands inside the 14:00-02:00 window, never past the e
       assert.ok(slot.at <= WINDOW_SHUTS, `slot ${slot.index} (${slot.label}) lands after the window shuts`);
     }
   });
-  resetSchedule();
+  await resetSchedule();
 });
 
 test('a window with less than three hours left gets fewer moments, not five spilling past 02:00', async () => {
-  const { ensureTodaysSlots } = await import('../src/memo.js');
 
   // 00:30 leaves 90 minutes, which at the 45-minute minimum gap holds three
   // moments. The old arithmetic always laid out five and let the last ones
@@ -3154,9 +2866,9 @@ test('a window with less than three hours left gets fewer moments, not five spil
   // honest answer; the gap is what keeps two upload windows from
   // overlapping, so it is not the thing to compromise.
   db.prepare('DELETE FROM memo_slots').run();
-  atClock('2026-09-19T00:30:00+01:00', () => {
+  await atClock('2026-09-19T00:30:00+01:00', async () => {
     assert.equal(today(), '2026-09-18', 'after midnight but before the rollover, this is still the 18th');
-    ensureTodaysSlots();
+    await ensureTodaysSlots();
     const slots = generatedSlots();
     assert.equal(slots.length, 3, `90 minutes at a ${MEMO_MIN_GAP_MINUTES}min gap holds three moments`);
     for (const slot of slots) {
@@ -3167,7 +2879,7 @@ test('a window with less than three hours left gets fewer moments, not five spil
       assert.ok(gap >= MEMO_MIN_GAP_MINUTES, `only ${gap}min between moment ${i - 1} and ${i}`);
     }
   });
-  resetSchedule();
+  await resetSchedule();
 });
 
 test('Memo and the Rata keep to the same hours, and no slot lands outside them', async () => {
@@ -3176,8 +2888,8 @@ test('Memo and the Rata keep to the same hours, and no slot lands outside them',
   // window and scheduler.js's cron - so nothing but this stops one being
   // retuned later and the other quietly staying where it was.
   const { readFileSync } = await import('node:fs');
-  const scheduler = readFileSync(new URL('../src/scheduler.js', import.meta.url), 'utf8');
-  const revealHours = scheduler.match(/cron\.schedule\('0 ([\d,]+) \* \* \*'/)?.[1]?.split(',').map(Number);
+  const scheduler = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
+  const revealHours = scheduler.match(/REVEAL_HOURS = new Set\(\[([\d, ]+)\]\)/)?.[1]?.split(',').map(Number);
   assert.deepEqual(revealHours, [14, 17, 20, 23, 2], 'the Rata reveals every 3 hours across 14:00-02:00');
 
   // That every slot lands inside the window is checked separately, by the
@@ -3199,13 +2911,11 @@ test('Memo and the Rata keep to the same hours, and no slot lands outside them',
 // firing while an earlier one is untouched would be nonsense on screen -
 // "you missed the third but the second hasn't happened yet".
 test("today's slots fire strictly in order, so a later moment can never open before an earlier one", async () => {
-  const { default: db } = await import('../src/db.js');
-  const { ensureTodaysSlots, triggerNextSlot, MEMO_SLOTS_PER_DAY } = await import('../src/memo.js');
-  const { today } = await import('../src/time.js');
+  const triggerNextSlot = async () => (await api('POST', '/admin/memo/trigger-next', { token: ADMIN })).data;
 
   db.prepare('DELETE FROM memo_uploads').run();
   db.prepare('DELETE FROM memo_slots').run();
-  atClock(memoAfternoon(), ensureTodaysSlots);
+  await atClock(memoAfternoon(), ensureTodaysSlots);
 
   const slots = db.prepare('SELECT slot_index, scheduled_at FROM memo_slots WHERE day = ? ORDER BY slot_index').all(today());
   assert.equal(slots.length, MEMO_SLOTS_PER_DAY);
@@ -3218,9 +2928,9 @@ test("today's slots fire strictly in order, so a later moment can never open bef
 
   // The owner's manual trigger must respect the same order, not skip ahead.
   for (let i = 0; i < MEMO_SLOTS_PER_DAY; i++) {
-    assert.equal(triggerNextSlot().slotIndex, i, 'trigger-next should always open the earliest unfired slot');
+    assert.equal((await triggerNextSlot()).slotIndex, i, 'trigger-next should always open the earliest unfired slot');
   }
-  assert.equal(triggerNextSlot().error, 'err_memo_no_slots_left');
+  assert.equal((await triggerNextSlot()).error, 'err_memo_no_slots_left');
 
   // And the notified timestamps came out in slot order too.
   const fired = db.prepare('SELECT slot_index, notified_at FROM memo_slots WHERE day = ? ORDER BY notified_at').all(today());
@@ -3230,7 +2940,7 @@ test("today's slots fire strictly in order, so a later moment can never open bef
   // tests with nothing un-notified to work against - put a fresh, untouched
   // day back rather than leaving the next test to rebuild one at whatever
   // hour the suite is running at.
-  resetSchedule();
+  await resetSchedule();
 });
 
 // A slot that never fired used to stay "due" indefinitely, with no day
@@ -3238,71 +2948,54 @@ test("today's slots fire strictly in order, so a later moment can never open bef
 // back on, would fire every accumulated slot at once. A missed moment stays
 // missed.
 test('a slot from a previous day is never resurrected as due, however long it sat unfired', async () => {
-  const { default: db } = await import('../src/db.js');
-  const { getDueSlots, ensureTodaysSlots } = await import('../src/memo.js');
-  const { today } = await import('../src/time.js');
-
+  const { fireDueSlots } = await import('../src/workerMemo.js');
   db.prepare('DELETE FROM memo_uploads').run();
   db.prepare('DELETE FROM memo_slots').run();
   db.prepare("INSERT INTO memo_slots (day, slot_index, scheduled_at) VALUES ('2026-01-01', 0, '2026-01-01 12:00:00')").run();
 
-  assert.deepEqual(getDueSlots(), [], "a January slot must not be due in " + today());
-
-  // A genuinely due slot today still fires. Generated and read back at the
-  // same pinned instant: the other four moments are scheduled later that
-  // afternoon, so whether they are "due" too depends entirely on what time
-  // it is when this runs - which is the whole thing being taken out of the
-  // suite's hands here.
-  const due = atClock(memoAfternoon(), () => {
-    ensureTodaysSlots();
+  const fired = await atClock(memoAfternoon(), async () => {
+    await ensureTodaysSlots();
     db.prepare("UPDATE memo_slots SET scheduled_at = '2020-01-01 00:00:00' WHERE day = ? AND slot_index = 0").run(today());
-    return getDueSlots();
+    return fireDueSlots(w.env);
   });
-  assert.equal(due.length, 1, 'only the backdated slot has come round yet');
-  assert.equal(due[0].day, today());
+  assert.equal(fired, 1, 'only the backdated slot of today has come round yet');
+  assert.equal(db.prepare("SELECT notified_at FROM memo_slots WHERE day = '2026-01-01'").get().notified_at, null, 'a January slot is never resurrected');
+  assert.ok(db.prepare('SELECT notified_at FROM memo_slots WHERE day = ? AND slot_index = 0').get(today()).notified_at, "today's due slot opened");
 
-  resetSchedule();
+  await resetSchedule();
 });
 
-// Memo ships to prod fully working but shut to guests until the party, so
-// it can actually be exercised beforehand instead of sitting behind a flag
-// nobody can test. Admins are the exception throughout.
 test('MEMO_START_DATE hides Memo from guests and silences the scheduler, while admins keep full access', async () => {
-  const { memoAvailableTo, memoScheduleActive, memoOpenToEveryone } = await import('../src/memo.js');
-  const original = process.env.MEMO_START_DATE;
-  const guest = { isAdmin: false }, admin = { isAdmin: true };
+  const { available, fireDueSlots } = await import('../src/workerMemo.js');
+  const guest = { is_admin: 0 }, admin = { is_admin: 1 };
+  const day = today();
   try {
-    delete process.env.MEMO_START_DATE;
-    assert.equal(memoOpenToEveryone(), true, 'unset means open now - what QA wants');
-    assert.equal(memoAvailableTo(guest), true);
-    assert.equal(memoScheduleActive(), true);
+    delete w.env.MEMO_START_DATE;
+    assert.equal(available(w.env, guest, day), true, 'unset means open now');
 
-    process.env.MEMO_START_DATE = '2099-01-01';
-    assert.equal(memoAvailableTo(guest), false, 'a guest must not reach Memo before the date');
-    assert.equal(memoAvailableTo(admin), true, 'an admin still can, so prod stays testable');
-    assert.equal(memoScheduleActive(), false, 'and nobody gets pushed a prompt they cannot open');
+    w.env.MEMO_START_DATE = '2099-01-01';
+    assert.equal(available(w.env, guest, day), false, 'a guest must not reach Memo before the date');
+    assert.equal(available(w.env, admin, day), true, 'an admin still can, so the real app stays testable');
+    assert.equal((await api('GET', '/memo/today', { token: userToken })).status, 404, 'the guest route is shut');
+    assert.equal(await fireDueSlots(w.env), 0, 'and nobody gets pushed a prompt they cannot open');
 
-    process.env.MEMO_START_DATE = '2000-01-01';
-    assert.equal(memoAvailableTo(guest), true, 'once the day arrives it opens to everyone');
-    assert.equal(memoScheduleActive(), true);
+    w.env.MEMO_START_DATE = '2000-01-01';
+    assert.equal(available(w.env, guest, day), true, 'once the day arrives it opens to everyone');
   } finally {
-    if (original === undefined) delete process.env.MEMO_START_DATE;
-    else process.env.MEMO_START_DATE = original;
+    delete w.env.MEMO_START_DATE;
   }
 });
 
-// The flag still wins over the date - ENABLE_MEMO off means off for everyone.
 test('ENABLE_MEMO=off blocks Memo even for an admin, and even after the start date', async () => {
-  const { memoAvailableTo, memoScheduleActive } = await import('../src/memo.js');
-  const originalFlag = process.env.ENABLE_MEMO, originalDate = process.env.MEMO_START_DATE;
+  const { available, fireDueSlots } = await import('../src/workerMemo.js');
   try {
-    process.env.ENABLE_MEMO = 'false';
-    process.env.MEMO_START_DATE = '2000-01-01';
-    assert.equal(memoAvailableTo({ isAdmin: true }), false);
-    assert.equal(memoScheduleActive(), false);
+    w.env.ENABLE_MEMO = 'false';
+    w.env.MEMO_START_DATE = '2000-01-01';
+    assert.equal(available(w.env, { is_admin: 1 }, today()), false);
+    assert.equal(await fireDueSlots(w.env), 0);
   } finally {
-    if (originalFlag === undefined) delete process.env.ENABLE_MEMO; else process.env.ENABLE_MEMO = originalFlag;
-    if (originalDate === undefined) delete process.env.MEMO_START_DATE; else process.env.MEMO_START_DATE = originalDate;
+    w.env.ENABLE_MEMO = 'true';
+    delete w.env.MEMO_START_DATE;
   }
 });
 
@@ -3531,7 +3224,7 @@ test('the Memo feed is scoped to the current moment - a new one clears what came
 // buttons rendered blank and any tap on them was rejected by the API.
 test('the reaction list the client renders matches the one the server accepts', async () => {
   const { readFileSync } = await import('node:fs');
-  const { MEMO_REACTION_EMOJI } = await import('../src/memo.js');
+  const { REACTIONS: MEMO_REACTION_EMOJI } = await import('../src/workerMemo.js');
   const source = readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   const literal = source.match(/const MEMO_REACTION_EMOJI = \[(.*?)\];/s);
   assert.ok(literal, 'app.js should still declare MEMO_REACTION_EMOJI as an array literal');
@@ -3662,58 +3355,6 @@ test('you can mirror your own Memo photo, and only your own', async () => {
   await api('DELETE', `/admin/users/${other.id}`, { token: ADMIN });
 });
 
-test('stitching the day video answers immediately and reports when it is done', async () => {
-  // This is the bug Ivo hit as "publishing the video to the wall gives an
-  // error". Nothing in the encode was broken - the request simply outlived
-  // the proxy in front of it, which cuts at 100 seconds and returns a 524.
-  // A day with a hundred photos is a hundred seconds of video and was never
-  // going to fit inside an HTTP request, so the work moved out of it.
-  //
-  // What is guarded here is the shape of the exchange, not the speed: the
-  // call answers 202 without waiting, and the result arrives through the
-  // status endpoint.
-  const day = today();
-  const shooters = [];
-  for (let i = 0; i < 2; i++) {
-    shooters.push((await api('POST', '/admin/users', { token: ADMIN, body: { name: `Recap Shooter ${i}` } })).data);
-  }
-
-  const slots = (await api('GET', '/memo/today', { token: shooters[0].token })).data.slots;
-  const slot = slots.find((sl) => sl.status === 'waiting') ?? slots[0];
-  markSlotNotified(slot.id);
-  for (const shooter of shooters) {
-    const up = await apiUpload(`/memo/slots/${slot.id}/upload`, {
-      token: shooter.token, buffer: REAL_JPEG, filename: 'shot.jpg', mimeType: 'image/jpeg',
-    });
-    assert.equal(up.status, 201);
-  }
-
-  // Answers without waiting for the encode.
-  const started = await api('POST', `/admin/memo/${day}/recap/generate`, { token: ADMIN });
-  assert.equal(started.status, 202, 'the encode must not be held inside the request');
-  assert.equal(started.data.started, true);
-
-  // Asking again while it runs is refused rather than starting a second
-  // encode on a box that can barely afford the first.
-  const again = await api('POST', `/admin/memo/${day}/recap/generate`, { token: ADMIN });
-  assert.ok([409, 200, 202].includes(again.status));
-  if (again.status === 409) assert.equal(again.data.error, 'err_memo_recap_running');
-
-  // And the result arrives by asking, which is what the button now does.
-  let state = 'running';
-  for (let i = 0; i < 120 && state === 'running'; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    state = (await api('GET', `/admin/memo/${day}/recap/status`, { token: ADMIN })).data.status;
-  }
-  assert.equal(state, 'done', 'the video has to finish and say so');
-
-  // Finishing means it is on the Wall, which is the thing that was asked for.
-  const posts = (await api('GET', '/plaza-posts', { token: ADMIN })).data.posts;
-  assert.ok(posts.some((p) => p.type === 'video'), 'a finished video is published to the Wall');
-
-  for (const shooter of shooters) await api('DELETE', `/admin/users/${shooter.id}`, { token: ADMIN });
-});
-
 test('the day video made on the admin phone is listed, published and refused when wrong', async () => {
   // APP-LG-007: the phone builds the video from the photo list and uploads
   // it, so the server never runs ffmpeg (needed for Cloudflare Workers).
@@ -3768,158 +3409,16 @@ test('the day video made on the admin phone is listed, published and refused whe
   await api('DELETE', `/admin/users/${shooter.id}`, { token: ADMIN });
 });
 
-test('the published day video is compressed, not handed over at ffmpeg defaults', async () => {
-  // Ivo, after a night with real people: the video that goes on the Wall has
-  // to be compressed "to not jam the FE". His worry was the volume filling
-  // up; measuring says the feed is the better reason. A day of ~120 photos
-  // is roughly 9MB at ffmpeg's defaults and under 5MB at these settings -
-  // the disk would have coped either way, somebody's mobile data at 2am is
-  // the part that would not.
-  //
-  // Asserted as a bitrate rather than a file size, because file size only
-  // says "this day was short". What this guards is that the encoder settings
-  // do not quietly go back to the defaults.
-  const day = today();
-  const shooters = [];
-  for (let i = 0; i < 3; i++) {
-    shooters.push((await api('POST', '/admin/users', { token: ADMIN, body: { name: `Bitrate Shooter ${i}` } })).data);
-  }
-  const slots = (await api('GET', '/memo/today', { token: shooters[0].token })).data.slots;
-  const slot = slots.find((sl) => sl.status === 'waiting') ?? slots[0];
-  markSlotNotified(slot.id);
-  for (const shooter of shooters) {
-    await apiUpload(`/memo/slots/${slot.id}/upload`, {
-      token: shooter.token, buffer: REAL_JPEG, filename: 'shot.jpg', mimeType: 'image/jpeg',
-    });
-  }
-
-  await api('POST', `/admin/memo/${day}/recap/generate`, { token: ADMIN });
-  let state = 'running';
-  for (let i = 0; i < 120 && state === 'running'; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    state = (await api('GET', `/admin/memo/${day}/recap/status`, { token: ADMIN })).data.status;
-  }
-  assert.equal(state, 'done');
-
-  const { getRecap, MEMO_DIR, MEMO_RECAP_SECONDS_PER_PHOTO } = await import('../src/memo.js');
-  const { statSync } = await import('node:fs');
-  const { join } = await import('node:path');
-  const recap = getRecap(day);
-  assert.ok(recap, 'the day has a video');
-
-  const bytes = statSync(join(MEMO_DIR, recap.file_path)).size;
-  const seconds = shooters.length * MEMO_RECAP_SECONDS_PER_PHOTO;
-  const kbPerSecond = bytes / 1024 / seconds;
-  // Generous: these are tiny flat test frames, so the real ceiling is far
-  // below this. It is set to catch the settings being dropped, which would
-  // multiply this several times over, not to police a few KB either way.
-  assert.ok(
-    kbPerSecond < 400,
-    `the Wall video should stay light - got ${kbPerSecond.toFixed(0)} KB per second of video`,
-  );
-
-  for (const shooter of shooters) await api('DELETE', `/admin/users/${shooter.id}`, { token: ADMIN });
-});
-
-test('one photo nobody can decode is skipped, not allowed to kill the whole day\'s video', async () => {
-  // The video was OOM-killed on a day holding three photos. The cause was
-  // resolution, not count: Memo stores what the phone actually shot,
-  // untouched, and decoding a 48MP JPEG while libx264 was also resident
-  // peaked at 219MB next to the app's own ~95MB on a 512MB machine. The
-  // stitch is two passes now (see buildDayRecapVideo), which caps it at
-  // about 102MB whatever the phone.
-  //
-  // Splitting it also made this possible, which is what the test is for: a
-  // photo that will not decode - a HEIC on a build without it, an upload cut
-  // off halfway - used to take every other photo of that day down with it.
-  // It should cost its own second of video and nothing else.
-  //
-  // On a day of its own, not today(): the suite shares today's day with
-  // every other Memo test, several of which upload deliberate junk, so
-  // counting skips there measures the other tests rather than this one.
-  const day = '2026-01-15';
-  const { MEMO_DIR, buildDayRecapVideo } = await import('../src/memo.js');
-  const { writeFileSync } = await import('node:fs');
-  const { join } = await import('node:path');
-
-  const slot = db.prepare('SELECT id FROM memo_slots LIMIT 1').get()
-    ?? (() => {
-      db.prepare('INSERT INTO memo_slots (day, slot_index, scheduled_at, notified_at) VALUES (?, 0, 1, 1)').run(day);
-      return db.prepare('SELECT id FROM memo_slots WHERE day = ?').get(day);
-    })();
-
-  // Two photos that decode, and one that stops right after the JPEG magic
-  // bytes - what a truncated upload leaves on disk.
-  writeFileSync(join(MEMO_DIR, 'salvage-ok-1.jpg'), REAL_JPEG);
-  writeFileSync(join(MEMO_DIR, 'salvage-ok-2.jpg'), REAL_JPEG);
-  writeFileSync(join(MEMO_DIR, 'salvage-truncated.jpg'), Buffer.from([0xff, 0xd8, 0x00, 0x01, 0x02, 0x03]));
-
-  // One row per user - (slot_id, user_id) is unique, one upload each.
-  const people = [];
-  for (let i = 0; i < 3; i++) {
-    people.push((await api('POST', '/admin/users', { token: ADMIN, body: { name: `Salvage Person ${i}` } })).data);
-  }
-  const files = ['salvage-ok-1.jpg', 'salvage-truncated.jpg', 'salvage-ok-2.jpg'];
-  files.forEach((file, i) => {
-    db.prepare(
-      "INSERT INTO memo_uploads (slot_id, user_id, day, kind, mime_type, file_path, file_size) VALUES (?, ?, ?, 'photo', 'image/jpeg', ?, ?)"
-    ).run(slot.id, people[i].id, day, file, 100);
-  });
-
-  const result = await buildDayRecapVideo(day);
-  assert.ok(!result.error, `the day should still produce a video - got ${result.error}`);
-  assert.equal(result.skipped, 1, 'only the truncated photo should be skipped');
-  assert.equal(result.photoCount, 2, 'both readable photos should still be in the video');
-
-  // And a day where nothing at all decodes says so, rather than handing back
-  // a video with no frames in it.
-  db.prepare('DELETE FROM memo_uploads WHERE day = ? AND file_path LIKE ?').run(day, 'salvage-ok-%');
-  const allBad = await buildDayRecapVideo(day);
-  assert.equal(allBad.error, 'err_memo_recap_unreadable');
-
-  db.prepare('DELETE FROM memo_uploads WHERE day = ?').run(day);
-  for (const person of people) await api('DELETE', `/admin/users/${person.id}`, { token: ADMIN });
-});
-
-test('a day with no photos is refused up front, not started and failed later', async () => {
-  // Answering "started" to work that is certain to fail leaves the button
-  // spinning against nothing. The one check cheap enough to do before
-  // replying is whether there is anything to stitch.
-  const empty = await api('POST', '/admin/memo/1999-01-01/recap/generate', { token: ADMIN });
-  assert.equal(empty.status, 400);
-  assert.equal(empty.data.error, 'err_memo_no_photos');
-});
-
 test('Memo is gated behind ENABLE_MEMO - disabled means every endpoint 404s', async () => {
-  process.env.ENABLE_MEMO = 'false';
+  w.env.ENABLE_MEMO = 'false';
   try {
     assert.equal((await api('GET', '/memo/today', { token: userToken })).status, 404);
     assert.equal((await api('GET', '/memo/recaps', { token: userToken })).status, 404);
     assert.equal((await api('GET', '/admin/memo/days', { token: ADMIN })).status, 404);
     assert.equal((await apiUpload('/memo/slots/1/upload', { token: userToken, buffer: Buffer.from('x'), filename: 'x.jpg', mimeType: 'image/jpeg' })).status, 404);
   } finally {
-    process.env.ENABLE_MEMO = 'true';
+    w.env.ENABLE_MEMO = 'true';
   }
-});
-
-test('owner wipe clears every Memo table AND deletes the actual files from disk', async () => {
-  // Owner-only permission itself is covered by "a non-owner admin cannot
-  // use any feature wipe switch" above - this just checks what the wipe
-  // actually does. ADMIN is the seeded owner (see seedResult).
-  const before = await api('GET', '/memo/today', { token: userToken });
-  const slot = before.data.slots[2]; // already uploaded to in the earlier "accepts one upload" test
-  const uploadRow = db.prepare('SELECT file_path FROM memo_uploads WHERE slot_id = ?').get(slot.id);
-  assert.ok(uploadRow, 'setup: this slot should already have an upload from an earlier test');
-  const absPath = join(MEMO_DIR, uploadRow.file_path);
-  assert.ok(existsSync(absPath), 'setup: the file should exist on disk before wiping');
-
-  const asOwner = await api('POST', '/admin/memo/wipe', { token: ADMIN });
-  assert.equal(asOwner.status, 200);
-
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memo_slots').get().n, 0);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memo_uploads').get().n, 0);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memo_recaps').get().n, 0);
-  assert.ok(!existsSync(absPath), 'the uploaded file itself should be deleted, not just its DB row');
 });
 
 /* --------------------------- Feature wipe switches --------------------------- */
@@ -3987,7 +3486,7 @@ test('no push notification copy carries a capital letter - the golden rule survi
   // were not, so the titles were the only uppercase text in the whole app.
   const { readFileSync } = await import('node:fs');
   const offenders = [];
-  for (const file of ['consequences.js', 'routes.js', 'push.js', 'scheduler.js', 'memo.js']) {
+  for (const file of ['worker.js', 'workerPush.js', 'workerMemo.js', 'workerVotes.js', 'workerPlaza.js', 'workerTools.js']) {
     const src = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8');
     src.split('\n').forEach((line, i) => {
       if (!/\b(pt|en)\s*:/.test(line)) return;
@@ -4005,7 +3504,7 @@ test('no push notification copy carries a capital letter - the golden rule survi
 
   // The night labels reach the lock screen through interpolation, so they
   // are copy too even though they never appear as a pt/en literal.
-  const routes = readFileSync(new URL('../src/routes.js', import.meta.url), 'utf8');
+  const routes = readFileSync(new URL('../src/workerVotes.js', import.meta.url), 'utf8');
   const labels = [...routes
     .match(/const NIGHT_LABEL = \{[^}]*\}/)[0]
     .matchAll(/'([^']*)'/g)].map(([, v]) => v);
@@ -4090,37 +3589,6 @@ test('publishing the night to the Wall waits for both rounds, but not for a roun
   for (const u of [a, b]) await api('DELETE', `/admin/users/${u.data.id}`, { token: ADMIN });
 });
 
-test('a feature can be filled with demo data and cleared again, owner-only', async () => {
-  // The point is a final check on prod with something in it, then one press
-  // to clear - rather than inventing entries by hand and picking them back
-  // out. Seeding is deliberately a no-op when the feature already holds
-  // anything, so a double press cannot double the data.
-  await api('POST', '/admin/consequences/wipe', { token: ADMIN });
-
-  // Its own admin rather than the file's shared user, whose key several
-  // earlier tests regenerate - borrowing it here got a 401 that looked like
-  // a permission result and was not one.
-  const helper = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Seed Button Helper' } });
-  await api('PATCH', `/admin/users/${helper.data.id}/admin`, { token: ADMIN, body: { isAdmin: true } });
-  const asAdmin = await api('POST', '/admin/consequences/seed-demo', { token: helper.data.token });
-  assert.equal(asAdmin.status, 403, 'filling a feature belongs with the owner, like every other danger-zone switch');
-  await api('DELETE', `/admin/users/${helper.data.id}`, { token: ADMIN });
-
-  const seeded = await api('POST', '/admin/consequences/seed-demo', { token: ADMIN });
-  assert.equal(seeded.status, 200);
-  const after = (await api('GET', '/admin/consequences', { token: ADMIN })).data;
-  assert.ok(after.length > 0, 'the feature should have something in it now');
-
-  const again = await api('POST', '/admin/consequences/seed-demo', { token: ADMIN });
-  assert.equal(again.status, 200);
-  const afterTwice = (await api('GET', '/admin/consequences', { token: ADMIN })).data;
-  assert.equal(afterTwice.length, after.length, 'pressing twice must not double the data');
-
-  await api('POST', '/admin/consequences/wipe', { token: ADMIN });
-  const cleared = (await api('GET', '/admin/consequences', { token: ADMIN })).data;
-  assert.equal(cleared.length, 0, 'and the wipe beside it takes it all back out');
-});
-
 // Reads the drawn text back out of a PDF built with compression off.
 // PDFKit writes its glyphs as hex strings inside TJ arrays - the numbers in
 // between are kerning adjustments, not content - and encodes the standard
@@ -4152,13 +3620,6 @@ function renderDedicationsToBuffer(rows, ownerName) {
   });
 }
 
-// The golden rule is enforced by `body { text-transform: lowercase }`, which
-// reaches every screen in the app and nothing else. The dedications PDF is
-// the one artefact that leaves the browser entirely, so the signature is
-// lowercased in code instead - and that was unguarded, because PDFKit
-// deflates its content streams and reading the text back needed a parser
-// this project does not carry. Building the same document with compression
-// off is the cheaper seam.
 test('the dedications PDF signs every message in lowercase, however the name was typed', async () => {
   const buf = await renderDedicationsToBuffer([
     { text: 'Parabens e muitos anos.', author: 'Alice MOREIRA' },
@@ -4288,7 +3749,7 @@ test('the guest-list card empties the list and puts the default guests back', as
   // Keys are freshly generated, not derived from the name. A key anyone can
   // work out from a guest list is fine for a QA tester predicting their own
   // login and not fine for the list the real party runs on.
-  const { generateDemoUserToken } = await import('../src/db.js');
+  const { generateDemoUserToken } = await import('../src/demoUsers.js');
   const sample = after.find((u) => !u.is_owner);
   assert.notEqual(sample.token, generateDemoUserToken(sample.name),
     'a restored guest must not get the predictable demo key');
@@ -4301,7 +3762,7 @@ test('the guest-list card empties the list and puts the default guests back', as
 });
 
 test('the change-key form cannot be used to test other people\'s keys: taken keys count like failed logins', async () => {
-  (await import('../src/rateLimit.js')).resetAuthAttempts();
+  db.exec('DELETE FROM auth_attempts');
   const probe = await api('POST', '/admin/users', { token: ADMIN, body: { name: "Prober" } });
   const target = await api('POST', '/admin/users', { token: ADMIN, body: { name: "Target" } });
   let last;

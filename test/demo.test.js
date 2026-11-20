@@ -9,34 +9,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync } from 'node:fs';
 
-const DB = join(tmpdir(), `appdoivo-demo-test-${process.pid}-${Date.now()}.sqlite`);
-process.env.DB_FILE = DB;
-// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
-process.env.ADMIN_PASSKEY = 'off';
-process.env.TOKEN_SECRET = 'demo-test-secret';
-process.env.DEMO_MODE = 'true';
-process.env.ANTHROPIC_API_KEY = '';
-process.env.ENABLE_PLAZA = 'true';
-process.env.CANONICAL_HOST = 'lodge-demo.appdoivo.com';
-process.env.REDIRECT_HOSTS = 'lodge-demo.fly.dev';
-
-const { default: app } = await import('../src/app.js');
-const { seedDemo } = await import('../src/seedDemo.js');
-seedDemo();
+// The public demo (APP_ENV demo) on the real Worker code (test/harness.js): the 23 sample people
+// are seeded on the first request, like on lodge-demo.appdoivo.com.
+const { startWorker } = await import('./harness.js');
+const w = await startWorker({ owner: false, claimOpen: false, env: { APP_ENV: 'demo', ADMIN_PASSKEY: undefined } });
+const { seedDemoContent } = await import('../src/worker.js');
+await fetch(w.base + '/api/demo'); // first request seeds the demo people
+await seedDemoContent(w.env);
 
 let server;
 let base;
 before(async () => {
-  server = createServer(app).listen(0);
-  await once(server, 'listening');
-  base = `http://127.0.0.1:${server.address().port}/api`;
+  base = `${w.base}/api`;
 });
-after(() => {
-  server?.close();
-  for (const ext of ['', '-wal', '-shm']) {
-    try { rmSync(DB + ext); } catch { /* ignore */ }
-  }
-});
+after(async () => { await w.close(); });
 
 async function api(method, path, { token, body } = {}) {
   const res = await fetch(base + path, {
@@ -104,7 +90,6 @@ test('what a stranger could abuse, or what wipes the demo for everyone, is refus
     ['POST', '/admin/consequences/wipe', admin],
     ['POST', '/admin/plaza-posts/wipe', admin],
     ['POST', '/admin/voting/furnished/reset-all', admin],
-    ['POST', '/admin/contestants/seed-demo', admin],
     ['DELETE', '/admin/contestants/1', admin],
     ['PUT', '/admin/settings', admin, {}],
   ];
@@ -144,24 +129,6 @@ function getAs(host, path) {
   });
 }
 
-test('the bare fly.dev address forwards to lodge-demo.appdoivo.com', async () => {
-  for (const host of ['lodge-demo.fly.dev']) {
-    const res = await getAs(host, '/plaza?x=1');
-    assert.equal(res.statusCode, 301, host);
-    assert.equal(res.headers.location, 'https://lodge-demo.appdoivo.com/plaza?x=1', host);
-  }
-});
-
-test('the demo domain and unlisted hosts (health checks) are served directly, not redirected', async () => {
-  for (const host of ['lodge-demo.appdoivo.com', '172.19.0.2:3000']) {
-    const res = await getAs(host, '/api/health');
-    assert.notEqual(res.statusCode, 301, host);
-  }
-});
-
-// The keys sat inside the hidden strip above the screen once the login gained the
-// painting behind the clock (#15), so phones could not see or tap them. Real browser,
-// iPhone and desktop sizes: both keys must be fully on screen and one tap logs in.
 test('the shared keys are on screen and one tap logs in, on a phone and a desktop', async () => {
   const { webkit, devices } = await import('playwright');
   const browser = await webkit.launch();
@@ -209,15 +176,17 @@ test('on the demo sign-in the key field and enter button stay above the keyboard
 });
 
 test('a memo photo sent to the public demo is kept on the server only as the placeholder', async () => {
-  const { demoMemoFile } = await import('../src/demo.js');
-  const { writeFileSync, readFileSync } = await import('node:fs');
-  const path = join(tmpdir(), `memo-demo-${process.pid}.jpg`);
-  writeFileSync(path, Buffer.from('a visitor\'s real photo'));
-  const file = { path, mimetype: 'video/mp4', size: 22 };
-  demoMemoFile(file);
-  const placeholder = readFileSync(new URL('../public/images/demo-photo.jpg', import.meta.url));
-  assert.deepEqual(readFileSync(path), placeholder);
-  assert.equal(file.mimetype, 'image/jpeg');
-  assert.equal(file.size, placeholder.length);
-  rmSync(path, { force: true });
+  const keys = await demoKeys();
+  const { readFileSync } = await import('node:fs');
+  const today = (await api('GET', '/memo/today', { token: keys.admin })).data;
+  const slot = today.slots[0];
+  w.db.prepare('UPDATE memo_slots SET notified_at = ? WHERE id = ?').run(new Date().toISOString().replace('T', ' ').replace('Z', ''), slot.id);
+  const form = new FormData();
+  form.append('file', new Blob([Buffer.from("a visitor's real photo")], { type: 'image/jpeg' }), 'me.jpg');
+  const up = await fetch(`${base}/memo/slots/${slot.id}/upload`, { method: 'POST', headers: { authorization: `Bearer ${keys.guest}` }, body: form });
+  assert.ok(up.status < 300, `the upload works: ${up.status} ${await up.clone().text()}`);
+  const row = w.db.prepare('SELECT file_path, mime_type FROM memo_uploads WHERE slot_id = ? ORDER BY id DESC').get(slot.id);
+  const stored = Buffer.from(w.FILES.files.get(row.file_path).body);
+  assert.deepEqual(stored, readFileSync(new URL('../public/images/demo-photo.jpg', import.meta.url)));
+  assert.equal(row.mime_type, 'image/jpeg');
 });

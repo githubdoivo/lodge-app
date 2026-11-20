@@ -8,27 +8,18 @@
 // is going to fix it.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { webkit } from 'playwright';
 
-process.env.TOKEN_SECRET ||= 'test-secret-not-used-anywhere-real';
-process.env.DB_FILE = join(tmpdir(), `appdoivo-smoke-${process.pid}.sqlite`);
-// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
-process.env.ADMIN_PASSKEY = 'off';
-
-const { default: app, seedResult } = await import('../src/app.js');
-
+const { startWorker } = await import('./harness.js');
+const w = await startWorker();
+const seedResult = { token: w.ownerKey };
 let server; let base; let browser;
 const T = process.env.CI ? 25000 : 5000;
 
 before(async () => {
-  server = app.listen(0);
-  await once(server, 'listening');
-  base = `http://127.0.0.1:${server.address().port}`;
+  base = w.base;
 });
-after(async () => { await browser?.close(); server?.close(); });
+after(async () => { await browser?.close(); await w.close(); });
 
 test('the server answers without a browser in the picture', async () => {
   const started = Date.now();

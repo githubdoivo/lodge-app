@@ -32,7 +32,7 @@ before(() => {
   u.run('Rui', hash('rui-key'), 'x', 1, 0);
   u.run('Ivo', hash('ivo-key'), 'x', 1, 1);
   u.run('Zé', hash('ze-key'), 'x', 0, 0);   // has a non-owner name so the demo seed stays out of the way
-  demo = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo' };
+  demo = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', DEMO_GUARD: 'off' };
   prod = { ...demo, APP_ENV: 'production' };
 });
 

@@ -26,7 +26,7 @@ before(() => {
   const u = db.prepare('INSERT INTO users (name, token_hash, token_enc, is_admin, is_owner) VALUES (?, ?, ?, ?, ?)');
   u.run('Ivo', hash('ivo'), 'x', 1, 1); u.run('Rui', hash('rui'), 'x', 1, 0);
   u.run('Ana', hash('ana'), 'x', 0, 0); u.run('Bea', hash('bea'), 'x', 0, 0); u.run('Cat', hash('cat'), 'x', 0, 0);
-  env = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', ASSETS: { fetch: async () => new Response('x') } };
+  env = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', DEMO_GUARD: 'off', ASSETS: { fetch: async () => new Response('x') } };
 });
 const call = (method, path, key, body) => worker.fetch(new Request('https://x.test' + path, {
   method, headers: { 'content-type': 'application/json', ...(key ? { authorization: 'Bearer ' + key } : {}) },

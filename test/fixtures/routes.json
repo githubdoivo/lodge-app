@@ -1,0 +1,692 @@
+[
+ {
+  "method": "GET",
+  "path": "/version",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/demo",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/demo/faceid-admin",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/auth/login",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/auth/passkey/finish",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/auth/passkey/options",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/auth/passkey/signin",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/auth/unclaimed-users",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/auth/claim-key",
+  "behindAuth": false,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/auth/logout",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/me/passkeys",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/me/passkeys/options",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/me/passkeys",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "DELETE",
+  "path": "/me/passkeys/:id",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/me",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/me/tutorial-seen",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/me/lang",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/me/change-token",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/plaza-posts",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/plaza-posts/:id/photo",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/plaza-posts",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/plaza-posts",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/plaza-posts/:id",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "DELETE",
+  "path": "/admin/plaza-posts/:id",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/plaza-posts/:id/pin",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/plaza-posts/:id/vote",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/consequences",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/consequences/current",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/consequences/revealed",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/consequences/:id/mark-done",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/votes/status",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/congeniality/vote",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/outfit/register",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/outfit/register/confirm",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "DELETE",
+  "path": "/outfit/register/pending",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PUT",
+  "path": "/outfit/register/photo",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/outfit/contestants/:id/photo",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/users/basic",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/votes",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/votes/confirm",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "DELETE",
+  "path": "/votes/pending",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/chat/messages",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/chat/messages",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/push/vapid-public-key",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/push/subscribe",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/push/unsubscribe",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/memo/today",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/memo/slots/:id/upload",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/memo/uploads/:id",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/memo/feed",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/memo/uploads/:id/flip",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/memo/uploads/:id/react",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/memo/recaps",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/memo/recaps/:day",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/users",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/users",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/users/:id/name",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/users/:id/regenerate-token",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/me/logo-customized",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "DELETE",
+  "path": "/admin/users/:id/passkeys",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "DELETE",
+  "path": "/admin/users/:id",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/users/:id/admin",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "GET",
+  "path": "/admin/wall-pseudonyms",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/users/:id/wall-pseudonym/reset",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/users/seed-guests",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/users/wipe",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/consequences/seed-demo",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/contestants/seed-demo",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/plaza-posts/seed-demo",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/chat/seed-demo",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/memo/seed-demo",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/consequences/wipe",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/contestants/wipe",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/plaza-posts/wipe",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/translations/backfill",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/chat/wipe",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "GET",
+  "path": "/admin/votes",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/dedications/mine",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PUT",
+  "path": "/dedications/mine",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/dedications",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/dedications/wipe",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "GET",
+  "path": "/admin/dedications.pdf",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "GET",
+  "path": "/admin/consequences",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/consequences/reveal",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/consequences/:id/assign",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/consequences/:id/approve",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "GET",
+  "path": "/admin/contestants",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/outfit/:night/photos.zip",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/contestants",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/contestants/register",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PATCH",
+  "path": "/admin/contestants/:id",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "DELETE",
+  "path": "/admin/contestants/:id",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "GET",
+  "path": "/admin/settings",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "PUT",
+  "path": "/admin/settings",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/voting",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/congeniality",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/publish-podium",
+  "behindAuth": true,
+  "owner": true
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/congeniality/runoff",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/congeniality/reset",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/congeniality/reset-votes",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/registration",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/open",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/close",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/reveal-next",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/reset",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/reset-all",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/voting/:night/runoff",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/memo/days",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/memo/:day/uploads.zip",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/memo/:day/recap",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/memo/:day/recap/photos",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/memo/:day/recap/publish",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "GET",
+  "path": "/admin/memo/:day/recap/status",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/memo/trigger-next",
+  "behindAuth": true,
+  "owner": false
+ },
+ {
+  "method": "POST",
+  "path": "/admin/memo/wipe",
+  "behindAuth": true,
+  "owner": true
+ }
+]

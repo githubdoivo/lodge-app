@@ -5,7 +5,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { validatePostContent, POST_TYPES } from './plaza-rules.js';
 import { FURNISHED_OBJECTS, SWAMP_BEINGS } from './pseudonyms.js';
 import { isNight, DEFAULT_NIGHT, NIGHTS } from './nights.js';
-import { addMemoRoutes, seedDemoMemo } from './workerMemo.js';
+import { addMemoRoutes, seedDemoMemo, available as memoAvailable, todayOf, fireDueSlots } from './workerMemo.js';
 import { addVotesRoutes, ensureVoteRounds } from './workerVotes.js';
 import { addPlazaRoutes } from './workerPlaza.js';
 import { addPushRoutes, broadcast, notifyUser } from './workerPush.js';
@@ -25,7 +25,7 @@ async function hashToken(secret, token) {
 
 // Same format as encryptToken() in src/tokens.js (AES-256-GCM, key = sha256(secret),
 // iv:tag:ciphertext in base64), so the Node app can read keys the Worker writes.
-async function encryptToken(secret, token) {
+export async function encryptToken(secret, token) {
   const raw = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
   const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -215,6 +215,11 @@ const routes = {
     logo_customized: !!ctx.user.logo_customized,
     plazaEnabled: ctx.env.ENABLE_PLAZA === 'true',
     adminPromotionEnabled: ctx.env.ENABLE_ADMIN_PROMOTION === 'true',
+    // Hidden from guests until MEMO_START_DATE; admins always see it (the app shows the tab from this).
+    memoEnabled: memoAvailable(ctx.env, ctx.user, await todayOf(ctx.env)),
+    // The account card shows the account's own key, like Manage Users does.
+    key: await ctx.env.DB.prepare('SELECT token_enc FROM users WHERE id = ?').bind(ctx.user.id).first()
+      .then((r) => (r?.token_enc ? decryptToken(ctx.env.TOKEN_SECRET, r.token_enc) : null)).catch(() => null),
   }),
   '/api/plaza-posts': async (ctx) => {
     if (ctx.env.ENABLE_PLAZA !== 'true') return json({ error: 'err_not_found' }, 404);
@@ -238,6 +243,15 @@ const routes = {
     return json(results);
   },
   '/api/users/basic': async (ctx) => {
+    // ?freeFor=<night>: only people with no entry that night (as entrant or partner), caller included,
+    // so the admin's Snatch form never offers someone the server would refuse.
+    const freeFor = ctx.url.searchParams.get('freeFor');
+    if (isNight(freeFor)) {
+      const { results } = await ctx.env.DB.prepare(`SELECT u.id, u.name FROM users u WHERE NOT EXISTS (
+        SELECT 1 FROM contestants c WHERE c.night = ? AND (c.user_id = u.id OR c.partner_user_id = u.id))
+        ORDER BY u.name COLLATE NOCASE`).bind(freeFor).all();
+      return json(results);
+    }
     const { results } = await ctx.env.DB.prepare(
       'SELECT id, name FROM users WHERE id != ? ORDER BY name COLLATE NOCASE').bind(ctx.user.id).all();
     return json(results);
@@ -439,18 +453,36 @@ writes['PATCH /api/admin/consequences/:id/approve'] = async (ctx) => {
   await ctx.env.DB.prepare(`UPDATE consequences SET approved_at = ${now} WHERE id = ?`).bind(ctx.id).run();
   return json({ ok: true, consequence: await oneConsequence(ctx.env, ctx.id) });
 };
-writes['POST /api/admin/consequences/reveal'] = async (ctx) => {
-  const off = adminOnly(ctx); if (off) return off;
-  const pick = await ctx.env.DB.prepare(`SELECT c.id, c.text, u.name AS author FROM consequences c JOIN users u ON u.id = c.user_id
+// Draws one pending consequence; used by the admin button and by the timed reveals.
+async function revealConsequence(env, exec) {
+  const pick = await env.DB.prepare(`SELECT c.id, c.text, u.name AS author FROM consequences c JOIN users u ON u.id = c.user_id
     WHERE c.status = 'pending' ORDER BY RANDOM() LIMIT 1`).first();
-  if (!pick) return json({ error: 'err_no_pending_consequences' }, 404);
-  await ctx.env.DB.prepare(`UPDATE consequences SET status = 'used', revealed_at = ${now} WHERE id = ? AND status = 'pending'`).bind(pick.id).run();
-  ctx.exec.waitUntil(broadcast(ctx.env, { title: { pt: 'rata', en: 'rata' },
+  if (!pick) return null;
+  await env.DB.prepare(`UPDATE consequences SET status = 'used', revealed_at = ${now} WHERE id = ? AND status = 'pending'`).bind(pick.id).run();
+  exec.waitUntil(broadcast(env, { title: { pt: 'rata', en: 'rata' },
     body: { pt: 'saiu uma nova consequência, abre a app para a veres.', en: 'a new consequence was drawn, open the app to see it.' },
     tag: 'consequence', url: '/?tab=rata' }));
+  return pick;
+}
+writes['POST /api/admin/consequences/reveal'] = async (ctx) => {
+  const off = adminOnly(ctx); if (off) return off;
+  const pick = await revealConsequence(ctx.env, ctx.exec);
+  if (!pick) return json({ error: 'err_no_pending_consequences' }, 404);
   return json({ ok: true, revealed: pick });
 };
 
+// Timed jobs, as the Node scheduler ran them (Europe/Lisbon): a Rata reveal at 14, 17, 20, 23 and 02 h,
+// and every minute any Memo moment that is due opens and everyone gets the push.
+const REVEAL_HOURS = new Set([14, 17, 20, 23, 2]);
+export async function runTimedJobs(env, exec, at = Date.now()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Lisbon', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(new Date(at)).map((x) => [x.type, x.value]));
+  const hour = Number(parts.hour) % 24, minute = Number(parts.minute);
+  const done = { revealed: null, memo: 0 };
+  if (minute === 0 && REVEAL_HOURS.has(hour)) done.revealed = await revealConsequence(env, exec);
+  done.memo = await fireDueSlots(env, exec);
+  return done;
+}
 
 // ---- Snatch (src/votes.js) and Plaza chat (src/chat.js) -------------------
 // Push and translations are not on the Worker yet.
@@ -896,10 +928,75 @@ export async function resetDemo(env) {
   return { ok: true, files };
 }
 
+// The public demo: what would let one visitor spoil it for the next, or post where strangers read it,
+// is refused (as the Node demo did); an outfit photo is kept only as the placeholder.
+// Push stays on: the demo is where Ivo tries notifications.
+const DEMO_REFUSED = [
+  ['POST', /^\/api\/me\/change-token$/],
+  ['POST', /^\/api\/chat\/messages$/],
+  ['POST', /\/wipe$/],
+  ['POST', /^\/api\/admin\/voting\/[^/]+\/reset-all$/],
+  ['POST', /\/seed-guests$/],
+  ['DELETE', /^\/api\/admin\//],
+  ['PUT', /^\/api\/admin\/settings$/],
+  ['POST', /^\/api\/admin\/translations\/backfill$/],
+];
+async function demoGuard(request, env, path, ctx) {
+  const no = () => json({ error: 'err_demo_disabled' }, 403);
+  if (DEMO_REFUSED.some(([m, re]) => request.method === m && re.test(path))) return no();
+  // The shared guest and admin keys stay free of Face ID, so the next visitor still signs in with one tap.
+  if (path.startsWith('/api/me/passkeys')) {
+    const key = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim().toLowerCase();
+    if ([DEMO_GUEST_NAME, PRESET_ADMIN_NAME].some((n) => generateDemoUserToken(n) === key)) return no();
+  }
+  if (request.method === 'POST' && path === '/api/admin/plaza-posts' && ctx.body?.type === 'links') return no();
+  if (ctx.body?.photoBase64) {
+    const ph = await env.ASSETS.fetch(new Request(new URL('/images/demo-photo.jpg', request.url)));
+    const bytes = new Uint8Array(await ph.arrayBuffer());
+    let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    ctx.body.photoBase64 = `data:image/jpeg;base64,${btoa(bin)}`;
+  }
+  return null;
+}
+
+// Security headers on every response, as the Node server set them: only this site's own scripts run
+// (a guest's message carrying <script> cannot), and no other site can frame the app (clickjacking).
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self'", "connect-src 'self'",
+  "worker-src 'self'", "manifest-src 'self'", "object-src 'none'", "base-uri 'self'",
+  "form-action 'self'", "frame-ancestors 'none'",
+].join('; ');
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': CSP,
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), payment=(), usb=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+};
+function secure(res) {
+  const out = new Response(res.body, res);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) out.headers.set(k, v);
+  out.headers.delete('x-powered-by');
+  return out;
+}
+
 export default {
-  async scheduled(event, env, ctx) { ctx.waitUntil(resetDemo(env)); },
-  async fetch(request, env, exec = { waitUntil: (p) => p.catch(() => {}) }) {
+  async scheduled(event, env, ctx) {
+    // 04:00 UTC on the demo: the nightly reset. Every minute: Rata reveals and Memo moments.
+    if (event.cron === '0 4 * * *') ctx.waitUntil(resetDemo(env));
+    else ctx.waitUntil(runTimedJobs(env, ctx));
+  },
+  async fetch(request, env, exec) { return secure(await handle(request, env, exec)); },
+};
+
+async function handle(request, env, exec = { waitUntil: (p) => p.catch(() => {}) }) {
+  {
     const url = new URL(request.url);
+    // RFC 9116: security.txt lives under /.well-known/; the old bare path redirects there.
+    if (url.pathname === '/security.txt') return new Response(null, { status: 301, headers: { location: '/.well-known/security.txt' } });
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     const path = url.pathname.replace(/\/+$/, '');
     const ctx = { env, url, request, exec, ip: clientIp(request) };
@@ -918,6 +1015,8 @@ export default {
       ctx.body = (request.headers.get('content-type') || '').includes('multipart/form-data') ? {} : await readBody(request);
     }
     if (!handler) return json({ error: 'err_not_found' }, 404);
+    // DEMO_GUARD 'off' only exists in the feature tests (test/worker*.test.js); test/demo.test.js checks the guard itself.
+    if (env.APP_ENV === 'demo' && env.DEMO_GUARD !== 'off') { const refused = await demoGuard(request, env, path, ctx); if (refused) return refused; }
     await ensureDemoUsers(env);
     if (!PUBLIC.has(key)) {
       const auth = await authenticate(request, env, url);
@@ -926,5 +1025,5 @@ export default {
       ctx.token = auth.token;
     }
     return handler(ctx);
-  },
-};
+  }
+}

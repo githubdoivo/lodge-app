@@ -43,7 +43,7 @@ before(() => {
   db.prepare("INSERT INTO consequences (user_id, text, day, status, revealed_at) VALUES (2, 'sing', '2026-01-01', 'used', '2026-01-01 12:00:00')").run();
   db.prepare("INSERT INTO consequences (user_id, text, day, status) VALUES (2, 'dance', '2026-01-02', 'pending')").run();
   env = {
-    DB: d1(db), TOKEN_SECRET: SECRET, ENABLE_PLAZA: 'true', APP_ENV: 'demo',
+    DB: d1(db), TOKEN_SECRET: SECRET, ENABLE_PLAZA: 'true', APP_ENV: 'demo', DEMO_GUARD: 'off',
     ASSETS: { fetch: async () => new Response('<html>page</html>') },
   };
 });
@@ -457,7 +457,7 @@ test('party on: only the owner flips it; /api/demo tells the page; claiming foll
   assert.equal((await (await get('/api/admin/settings', 's.own', e)).json()).partyOn, true);
   assert.equal((await send('PUT', '/api/admin/settings', 's.own', { partyOn: false }, e)).status, 200);
   assert.equal((await (await get('/api/demo', null, e)).json()).partyOn, false);
-  assert.equal((await (await get('/api/demo', null, { ...e, APP_ENV: 'demo' })).json()).partyOn, true);
+  assert.equal((await (await get('/api/demo', null, { ...e, APP_ENV: 'demo', DEMO_GUARD: 'off' })).json()).partyOn, true);
 });
 test('claim key: 3+ letters, accents folded, works once even when tapped twice at once', async () => {
   const { db, env: e } = emptyEnv('production');
@@ -512,7 +512,7 @@ test('daily demo reset: clears what visitors made, files included, and seeds the
   db.prepare("INSERT INTO plaza_posts (type, author_id, text) VALUES ('announcement', 2, 'spam')").run();
   let deleted = [];
   const FILES = { list: async () => ({ objects: [{ key: 'a' }, { key: 'b' }], truncated: false }), delete: async (k) => { deleted = k; } };
-  const e = { DB: d1(db), FILES, APP_ENV: 'demo', TOKEN_SECRET: SECRET };
+  const e = { DB: d1(db), FILES, APP_ENV: 'demo', DEMO_GUARD: 'off', TOKEN_SECRET: SECRET };
   const out = await resetDemo(e);
   assert.equal(out.files, 2);
   assert.deepEqual(deleted, ['a', 'b']);

@@ -13,42 +13,14 @@ import { join } from 'node:path';
 import { rmSync } from 'node:fs';
 import { webkit, devices } from 'playwright';
 
-const DB = join(tmpdir(), `appdoivo-ui-test-${process.pid}-${Date.now()}.sqlite`);
-// Pinned rather than left to the ambient .env: without it the suite falls
-// back to a per-initialisation random secret (see tokens.js), so any part of
-// a run that re-initialises the module graph gets a secret that cannot read
-// the tokens the rest of the run created. Locally a developer's .env hides
-// that; CI, which has no .env, does not.
-// Pinned empty so the suite can never reach the real API, whatever is in a
-// developer's .env. dotenv does not overwrite a variable that is already
-// set, so assigning '' here wins over the key loaded when app.js imports
-// dotenv/config - and isConfigured() reads it as absent.
-//
-// Without this the suite silently starts billing an API the moment a key
-// exists locally, which is exactly what happened the first time one did.
-// Translations are exercised through a fake translator instead; see the
-// tests further down.
-process.env.ANTHROPIC_API_KEY = '';
-
-process.env.TOKEN_SECRET ||= 'test-secret-not-used-anywhere-real';
-process.env.DB_FILE = DB;
-// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
-process.env.ADMIN_PASSKEY = 'off';
-process.env.ADMIN_NAME = 'UI Test Admin';
-process.env.ENABLE_ADMIN_PROMOTION = 'true';
-process.env.ENABLE_PLAZA = 'true';
-process.env.ENABLE_MEMO = 'true';
-
-const { default: app, seedResult } = await import('../src/app.js');
-const { default: db } = await import('../src/db.js');
-const { MEMO_DIR, ensureTodaysSlots, zonedTimeToUtc } = await import('../src/memo.js');
-const { today, getTimezone, now, setClockForTests } = await import('../src/time.js');
-
-// The admin's real key is always generated (see seed() in db.js - no more
-// ADMIN_TOKEN pinning it, even outside production), so this reads the
-// actual generated value off seedResult rather than assuming a fixed
-// string.
-const ADMIN = seedResult.token;
+// The suite drives the real Worker (src/worker.js) through test/harness.js: SQLite stands in
+// for D1, a Map for R2. The owner signs in with a plain key (ADMIN_PASSKEY off in the harness);
+// the Face ID rule for owner and admins has its own suite, test/workerPasskeys.test.js.
+const { startWorker } = await import('./harness.js');
+const w = await startWorker({ ownerName: 'UI Test Admin' });
+const { db } = w;
+const ADMIN = w.ownerKey;
+const { setMemoClock, ensureSlots, todayOf, zonedToUtc, REACTIONS } = await import('../src/workerMemo.js');
 // GitHub Actions' shared runners occasionally get resource-starved enough
 // that a login flow taking well under 5s locally blows past a 5000ms
 // waitForSelector everywhere at once (seen firsthand: identical commits
@@ -73,41 +45,16 @@ let browser;
 // the answer is always in the status the page got back from /api/me, which
 // nothing was recording. Cheap enough to leave on permanently: one push per
 // error response, nothing at all on the happy path.
-const errorResponses = [];
+const errorResponses = w.errors;
 
 before(async () => {
-  server = createServer((req, res) => {
-    // The error code matters as much as the status: a /me answered 401
-    // err_token_missing (the browser sent no key) and one answered 401
-    // err_token_invalid (it sent a key the server does not know) point at
-    // completely different bugs, and the status alone cannot tell them apart.
-    let body = '';
-    const end = res.end.bind(res);
-    res.end = (chunk, ...rest) => {
-      if (chunk && res.statusCode >= 400) body = String(chunk).slice(0, 80);
-      return end(chunk, ...rest);
-    };
-    res.on('finish', () => {
-      if (res.statusCode >= 400) {
-        const sent = req.headers.authorization ? 'with a key' : 'no auth header';
-        errorResponses.push(`${new Date().toISOString()} ${req.method} ${req.url} -> ${res.statusCode} ${body} (${sent})`);
-      }
-    });
-    app(req, res);
-  });
-  server.listen(0);
-  await once(server, 'listening');
-  base = `http://127.0.0.1:${server.address().port}`;
+  base = w.base;
   browser = await webkit.launch();
 });
 
 after(async () => {
   await browser?.close();
-  server?.close();
-  for (const ext of ['', '-wal', '-shm']) {
-    try { rmSync(DB + ext); } catch { /* ignore */ }
-  }
-  try { rmSync(MEMO_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+  await w.close();
 });
 
 async function api(method, path, { token, body } = {}) {
@@ -2295,7 +2242,7 @@ test('a first login lands on Wall by default', async () => {
 });
 
 test('with ENABLE_PLAZA disabled, Wall is hidden in both the main app and Settings, and Rata is the landing tab instead', async () => {
-  process.env.ENABLE_PLAZA = 'false';
+  w.env.ENABLE_PLAZA = 'false';
   try {
     const context = await iphoneContext('iPhone 13');
     const page = await loginPage(context, ADMIN, '/');
@@ -2312,7 +2259,7 @@ test('with ENABLE_PLAZA disabled, Wall is hidden in both the main app and Settin
 
     await context.close();
   } finally {
-    process.env.ENABLE_PLAZA = 'true';
+    w.env.ENABLE_PLAZA = 'true';
   }
 });
 
@@ -3025,39 +2972,35 @@ test('the admin download-photos button shows progress, triggers a real download,
 
 // Defaults to the app's clock rather than Date.now(), so a pinned test and
 // the 15-minute upload window it is exercising agree on what "now" means.
-function markMemoSlotNotified(slotId, when = new Date(now())) {
+function markMemoSlotNotified(slotId, when = new Date()) {
   const ts = when.toISOString().replace('T', ' ').replace('Z', '');
   db.prepare('UPDATE memo_slots SET notified_at = ? WHERE id = ?').run(ts, slotId);
 }
 
 // Memo's five moments only exist inside a 14:00-02:00 window, and the app's
-// day does not roll over until 06:00 - so between 02:00 and 06:00 there is
-// deliberately no schedule to generate, and after roughly 23:15 there is no
-// longer room for all five. Any test wanting a normal full day has to say
-// what time it is instead of inheriting the hour the suite started at.
-//
-// This is the same seam api.test.js uses. It was missed here first time
-// round, which is why the suite went red at 02:12 one morning on a change
-// that had nothing to do with Memo.
-function withFullMemoDay(fn) {
-  const restore = setClockForTests(zonedTimeToUtc(today(), 15, 0, getTimezone()).toISOString());
+// day does not roll over until 06:00 - so a test wanting a normal full day
+// pins the Worker's Memo clock to 15:00 while today's moments are made,
+// instead of inheriting the hour the suite started at.
+async function withFullMemoDay(fn) {
+  const day = await todayOf(w.env);
+  const restore = setMemoClock(zonedToUtc(day, 15, 0).toISOString());
   try {
     db.prepare('DELETE FROM memo_slots').run();
-    ensureTodaysSlots();
-    return fn();
+    await ensureSlots(w.env, await todayOf(w.env));
+    return await fn();
   } finally {
     restore();
   }
 }
 
 test('Memo: a guest can shoot an open moment, it shows in the shared feed, another guest can react, and the owner publishes its video to the Wall', async () => {
-  const { MEMO_REACTION_EMOJI } = await import('../src/memo.js');
+  const MEMO_REACTION_EMOJI = REACTIONS;
   const user = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Memo UI Tester' } });
   const bystander = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Memo UI Bystander' } });
   // Built at a pinned afternoon, then read back over HTTP like any guest
   // would. Generating it up front is what stops the hour of the run
   // deciding whether this test has five moments, fewer, or none.
-  withFullMemoDay(() => {});
+  await withFullMemoDay(() => {});
   const todayRes = await api('GET', '/memo/today', { token: user.token });
   assert.ok(todayRes.slots?.length, `expected a full day of moments, got ${JSON.stringify(todayRes)}`);
   const slot = todayRes.slots[0];
@@ -3261,7 +3204,7 @@ test('a photo with a red left and a blue right comes out of Memo the same way ro
   // an EXIF flag or a rewritten file would all show up here identically -
   // as the wrong colour on the wrong side.
   const shooter = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Left Right Tester' } });
-  withFullMemoDay(() => {}); // a pinned afternoon: the hour of the run must not decide whether moments exist
+  await withFullMemoDay(() => {}); // a pinned afternoon: the hour of the run must not decide whether moments exist
   const todayRes = await api('GET', '/memo/today', { token: shooter.token });
   const slot = todayRes.slots.find((sl) => sl.status === 'waiting') ?? todayRes.slots[0];
   markMemoSlotNotified(slot.id);
@@ -3356,7 +3299,7 @@ test('tapping mirror actually flips the photo on screen, and it survives a reloa
   // look at their own face and decide, which is worthless if the change
   // waits for the next poll or for a round trip to finish.
   const shooter = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Mirror Tapper' } });
-  withFullMemoDay(() => {}); // a pinned afternoon: the hour of the run must not decide whether moments exist
+  await withFullMemoDay(() => {}); // a pinned afternoon: the hour of the run must not decide whether moments exist
   const todayRes = await api('GET', '/memo/today', { token: shooter.token });
   const slot = todayRes.slots.find((sl) => sl.status === 'waiting') ?? todayRes.slots[0];
   markMemoSlotNotified(slot.id);
@@ -3396,7 +3339,7 @@ test('tapping mirror actually flips the photo on screen, and it survives a reloa
 
 test('the Memo picker takes video as well as stills, and drops capture where there is no camera', async () => {
   const user = await api('POST', '/admin/users', { token: ADMIN, body: { name: 'Memo Desktop' } });
-  withFullMemoDay(() => {});
+  await withFullMemoDay(() => {});
   const today = await api('GET', '/memo/today', { token: user.token });
   markMemoSlotNotified(today.slots[0].id);
 
@@ -3431,7 +3374,7 @@ test('the Memo picker takes video as well as stills, and drops capture where the
 });
 
 test('Memo is gated behind ENABLE_MEMO - hidden from the tab bar and the admin panel when disabled', async () => {
-  process.env.ENABLE_MEMO = 'false';
+  w.env.ENABLE_MEMO = 'false';
   try {
     const context = await iphoneContext('iPhone 13');
     const page = await loginPage(context, ADMIN, '/');
@@ -3440,7 +3383,7 @@ test('Memo is gated behind ENABLE_MEMO - hidden from the tab bar and the admin p
     assert.equal(await adminPage.isVisible('[data-atab="memo"]'), false);
     await context.close();
   } finally {
-    process.env.ENABLE_MEMO = 'true';
+    w.env.ENABLE_MEMO = 'true';
   }
 });
 
@@ -3640,16 +3583,19 @@ test('the day video is a card in the feed like every other post, not bare on the
   // Asserted against a poll rather than against fixed colours, so a retune of
   // the palette moves both together and this keeps testing the thing it is
   // about: that the two read as the same kind of object.
-  const day = today();
-  const { writeFileSync } = await import('node:fs');
-  const { join } = await import('node:path');
+  const day = await todayOf(w.env);
+  const { readFileSync } = await import('node:fs');
   const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
 
   const recapName = 'ui-recap.mp4';
+  const tmp = join(tmpdir(), `lodge-${process.pid}-${recapName}`);
   execFileSync('ffmpeg', [
     '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=720x1280:d=1',
-    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', join(MEMO_DIR, recapName),
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', tmp,
   ]);
+  await w.FILES.put(recapName, readFileSync(tmp), { httpMetadata: { contentType: 'video/mp4' } });
   db.prepare('INSERT INTO memo_recaps (day, file_path, mime_type, file_size) VALUES (?, ?, ?, ?)')
     .run(day, recapName, 'video/mp4', 1000);
   const owner = db.prepare('SELECT id FROM users WHERE is_owner = 1').get();

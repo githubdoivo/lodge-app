@@ -28,7 +28,7 @@ before(() => {
     get: async (k) => (store.has(k) ? { arrayBuffer: async () => store.get(k) } : null),
     delete: async (keys) => { for (const k of [].concat(keys)) store.delete(k); },
   };
-  env = { DB: d1(db), FILES, TOKEN_SECRET: SECRET, APP_ENV: 'demo', ENABLE_MEMO: 'true', ASSETS: { fetch: async () => new Response('x') } };
+  env = { DB: d1(db), FILES, TOKEN_SECRET: SECRET, APP_ENV: 'demo', DEMO_GUARD: 'off', ENABLE_MEMO: 'true', ASSETS: { fetch: async () => new Response('x') } };
 });
 const call = (method, path, key) => worker.fetch(new Request('https://x.test' + path, {
   method, headers: { 'content-type': 'application/json', ...(key ? { authorization: 'Bearer ' + key } : {}) },

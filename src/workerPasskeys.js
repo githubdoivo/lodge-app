@@ -12,7 +12,10 @@ const enc = (s) => new TextEncoder().encode(s);
 const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 const countPasskeys = async (DB, userId) => (await DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?').bind(userId).first()).n;
 
-export const passkeyRequired = (env, user) => env.APP_ENV !== 'demo' && !!(user.is_admin || user.is_owner);
+// ADMIN_PASSKEY 'off' only exists in the test harness (test/harness.js); production never sets it.
+// On the demo only the private 'face id N' tryout admins need it (the shared keys stay one tap).
+export const passkeyRequired = (env, user) => env.ADMIN_PASSKEY !== 'off' && !!(user.is_admin || user.is_owner)
+  && (env.APP_ENV !== 'demo' || /^face id \d+$/.test(user.name || ''));
 
 async function newChallenge(DB, userId = null) {
   const c = b64u(crypto.getRandomValues(new Uint8Array(32)));

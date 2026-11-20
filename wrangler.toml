@@ -18,7 +18,7 @@ run_worker_first = ["/api/*"]
 
 # Daily demo reset at 04:00 UTC
 [triggers]
-crons = ["0 4 * * *"]
+crons = ["0 4 * * *", "* * * * *"]
 
 [vars]
 APP_ENV = "demo"

@@ -7,10 +7,12 @@ const SLOTS_PER_DAY = 5;
 const WINDOW_OPEN_MINUTES = 15;
 const MIN_GAP_MINUTES = 45;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
+// The demo is open to anyone, so its files are capped lower; it is wiped every night anyway.
+const DEMO_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const WINDOW_START_HOUR = 14; // 14:00 to 02:00 Lisbon time
 const WINDOW_END_HOUR = 2;
 const TZ = 'Europe/Lisbon';
-const REACTIONS = ['❤️', '💦', '👎'];
+export const REACTIONS = ['❤️', '💦', '👎'];
 import { makeZip } from './workerVotes.js';
 const RECAP_SECONDS_PER_PHOTO = 1;
 const EXT = {
@@ -29,13 +31,13 @@ function hourIn(ms) {
   return parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false }).format(new Date(ms)), 10) % 24;
 }
 // Same as today() in src/time.js: the day rolls over at day_rollover_hour (default 6), not midnight.
-async function todayOf(env) {
+export async function todayOf(env) {
   const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'day_rollover_hour'").first();
   const rollover = Number(row ? row.value : 6);
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(clock()));
   return hourIn(clock()) < rollover ? addDays(date, -1) : date;
 }
-function zonedToUtc(day, hour, minute) {
+export function zonedToUtc(day, hour, minute) {
   const guess = new Date(`${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00Z`);
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: TZ, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -45,7 +47,7 @@ function zonedToUtc(day, hour, minute) {
 }
 
 const isAdmin = (u) => !!(u.is_admin || u.is_owner);
-function available(env, user, day) {
+export function available(env, user, day) {
   if (env.ENABLE_MEMO !== 'true') return false;
   return !env.MEMO_START_DATE || day >= env.MEMO_START_DATE || isAdmin(user);
 }
@@ -117,16 +119,37 @@ async function serve(env, request, key, mime) {
   return new Response(obj.body, { headers });
 }
 
-const fileFrom = async (request, kindOk) => {
+const fileFrom = async (request, kindOk, env = {}) => {
   let form;
   try { form = await request.formData(); } catch { return { error: 'err_memo_invalid_type' }; }
   const file = form.get('file');
   if (!file || typeof file === 'string' || !kindOk(file.type || '')) return { error: 'err_memo_invalid_type' };
-  if (file.size > MAX_FILE_BYTES) return { error: 'err_memo_file_too_large' };
+  if (file.size > (env.APP_ENV === 'demo' ? DEMO_MAX_FILE_BYTES : MAX_FILE_BYTES)) return { error: 'err_memo_file_too_large' };
   return { file };
 };
 
 // Demo button: two photo moments from four people, so the shared feed has something (mirrors seedDemoMemo).
+// The minute job (src/worker.js runTimedJobs): opens every moment whose time has come, today only, and tells everyone.
+// Silent before MEMO_START_DATE, like the Node scheduler.
+export async function fireDueSlots(env, exec = { waitUntil: () => {} }) {
+  if (env.ENABLE_MEMO !== 'true') return 0;
+  const day = await todayOf(env);
+  if (env.MEMO_START_DATE && day < env.MEMO_START_DATE) return 0;
+  await ensureSlots(env, day); // the day's moments exist even if nobody has opened the app yet
+  const { results } = await env.DB.prepare('SELECT id FROM memo_slots WHERE day = ? AND notified_at IS NULL AND scheduled_at <= ? ORDER BY scheduled_at')
+    .bind(day, stamp(clock())).all();
+  for (const s of results) {
+    await env.DB.prepare('UPDATE memo_slots SET notified_at = ? WHERE id = ? AND notified_at IS NULL').bind(stamp(clock()), s.id).run();
+  }
+  if (results.length) {
+    const { broadcast } = await import('./workerPush.js');
+    exec.waitUntil(broadcast(env, { title: { pt: 'memo', en: 'memo' },
+      body: { pt: 'é agora, tens 15 minutos para captar este momento.', en: "it's time, you have 15 minutes to capture this moment." },
+      tag: 'memo', url: '/?tab=memo' }));
+  }
+  return results.length;
+}
+
 export async function seedDemoMemo(env) {
   const day = await todayOf(env);
   const { n } = await env.DB.prepare('SELECT COUNT(*) AS n FROM memo_uploads').first();
@@ -242,7 +265,7 @@ export function addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnl
 
   writes['POST /api/memo/slots/:id/upload'] = async (ctx) => {
     const { no } = await gate(ctx); if (no) return no;
-    const { file, error } = await fileFrom(ctx.request, (t) => /^(image|video)\//.test(t));
+    const { file, error } = await fileFrom(ctx.request, (t) => /^(image|video)\//.test(t), ctx.env);
     if (error) return json({ error }, 400);
     const slot = await ctx.env.DB.prepare('SELECT * FROM memo_slots WHERE id = ?').bind(ctx.id).first();
     if (!slot) return json({ error: 'err_memo_slot_not_found' }, 404);
@@ -305,7 +328,7 @@ export function addMemoRoutes({ routes, writes, getDyn, writeDyn, json, adminOnl
     if (publish && !(await ctx.env.DB.prepare("SELECT 1 AS x FROM memo_uploads WHERE day = ? AND kind = 'photo' LIMIT 1").bind(day).first())) {
       return json({ error: 'err_memo_no_photos' }, 400);
     }
-    const { file, error } = await fileFrom(ctx.request, (t) => t.startsWith('video/'));
+    const { file, error } = await fileFrom(ctx.request, (t) => t.startsWith('video/'), ctx.env);
     if (error) return json({ error }, 400);
     const key = `${day}/recap${extFor(file.type)}`;
     await ctx.env.FILES.put(key, file.stream(), { httpMetadata: { contentType: file.type } });

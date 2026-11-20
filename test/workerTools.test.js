@@ -30,7 +30,7 @@ before(() => {
   // On the real Lodge the owner and admins sign in with Face ID: a session stands in for it.
   const sess = db.prepare('INSERT INTO sessions (token_hash, user_id) VALUES (?, ?)');
   sess.run(hash('s.ivo'), 1); sess.run(hash('s.rui'), 2);
-  env = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', ENABLE_PLAZA: 'true', ASSETS: { fetch: async () => new Response('x') } };
+  env = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', DEMO_GUARD: 'off', ENABLE_PLAZA: 'true', ASSETS: { fetch: async () => new Response('x') } };
   prod = { ...env, APP_ENV: 'production' };
 });
 const call = (method, path, key, body, e = env) => worker.fetch(new Request('https://x.test' + path, {
@@ -69,9 +69,9 @@ test('face id tryout: demo only, a private admin each time', async () => {
   const one = await a.json();
   const two = await (await call('POST', '/api/demo/faceid-admin', null, {})).json();
   assert.notEqual(one.name, two.name);
+  // A tryout admin is a real admin, so the key alone is not enough: Face ID is asked for (test/demo.test.js).
   const me = await (await call('GET', '/api/me', one.key)).json();
-  assert.equal(me.isAdmin, true);
-  assert.equal(me.isOwner, false);
+  assert.equal(me.error, 'err_passkey_required');
 });
 
 const realFetch = globalThis.fetch;

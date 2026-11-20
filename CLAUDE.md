@@ -59,27 +59,28 @@ Full process in [CONTRIBUTING.md](CONTRIBUTING.md); the short version:
    below).
 2. Implement the whole requested batch of changes first — `npm test` and
    commit **once** at the end of the batch, not after every small change.
-3. Deploy the branch straight to QA (`scripts/deploy.sh qa`) so it can be
-   checked live before merging. **Bump the version in `package.json` before
-   every QA deploy** — the version badge is how a build gets identified at a
-   glance.
-4. Once confirmed on QA, open a PR, merge to `main`, then deploy prod
-   (`scripts/deploy.sh prod`) — only after explicit go-ahead, never
+3. Deploy to the demo (`npm run deploy`) so it can be checked live.
+   **Bump the version in `package.json` before every deploy** — the version
+   badge is how a build gets identified at a glance.
+4. Once confirmed on the demo, open a PR, merge to `main`, then deploy prod
+   (`npx wrangler deploy --config wrangler.prod.toml`) — only after explicit go-ahead, never
    proactively.
 5. Verify deploys with real commands (`curl` the `/api/version` endpoint,
    check logs), not just "should be deployed now."
 
-**"Hotfix" is a specific signal**: if the user says "hotfix X, deploy to QA
+**"Hotfix" is a specific signal**: if the user says "hotfix X, deploy to the demo
 and prod," that means skip the branch step — commit straight to `main`, test,
-deploy QA, verify, deploy prod, verify, all in one go. Everything else uses
-the normal branch → QA → approve → prod flow above.
+deploy the demo, verify, deploy prod, verify, all in one go. Everything else uses
+the normal branch → demo → approve → prod flow above.
 
 ## Testing
 
-- `npm test` runs both `test/api.test.js` (server logic) and
-  `test/ui.test.js` (real-browser Playwright/WebKit — same engine as iOS
-  Safari — across iPhone SE/13/Pro Max viewports). Both must pass before
-  considering a change done.
+- `npm test` runs every suite against the real Worker code: `test/worker*.test.js`
+  (feature rules), `test/api.test.js` and `test/security.test.js` (every route over HTTP),
+  `test/demo.test.js` (the public demo's guard) and `test/ui.test.js` (real-browser
+  Playwright/WebKit — same engine as iOS Safari — across iPhone SE/13/Pro Max viewports).
+  `test/harness.js` runs `src/worker.js` in Node with SQLite standing in for D1 and a Map
+  for R2. All must pass before considering a change done.
 - A pre-commit hook and GitHub Actions CI both run the same suite
   automatically — don't skip or work around either.
 - A test that fails identically across multiple runs is a real regression;

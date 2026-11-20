@@ -23,7 +23,7 @@ before(() => {
   db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
   const u = db.prepare('INSERT INTO users (name, token_hash, token_enc, is_admin, is_owner) VALUES (?, ?, ?, ?, ?)');
   u.run('Ivo', hash('ivo'), 'x', 1, 1); u.run('Rui', hash('rui'), 'x', 1, 0); u.run('Ana', hash('ana'), 'x', 0, 0); u.run('Bea', hash('bea'), 'x', 0, 0);
-  env = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', ENABLE_PLAZA: 'true', ASSETS: { fetch: async () => new Response('x') } };
+  env = { DB: d1(db), TOKEN_SECRET: SECRET, APP_ENV: 'demo', DEMO_GUARD: 'off', ENABLE_PLAZA: 'true', ASSETS: { fetch: async () => new Response('x') } };
 });
 const call = (method, path, key, body, e = env) => worker.fetch(new Request('https://x.test' + path, {
   method, headers: { 'content-type': 'application/json', ...(key ? { authorization: 'Bearer ' + key } : {}) },

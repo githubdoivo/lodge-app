@@ -30,8 +30,8 @@ Every notification opens the app straight to the tab it's about:
   stage of the results reveal (3rd -> 2nd -> 1st -> everyone).
 - **Plaza:** a new message is posted (skipping the poster's own device).
 
-The exact title/body strings live in `src/consequences.js`, `src/routes.js`
-and `src/push.js` (search for `broadcast(`) - update this doc if you change them.
+The exact title/body strings live in `src/worker.js`, `src/workerVotes.js`
+and `src/workerMemo.js` (search for `broadcast(`) - update this doc if you change them.
 
 Notes:
 

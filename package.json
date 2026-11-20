@@ -1,34 +1,21 @@
 {
   "name": "lodge-app",
-  "version": "1.22.2",
+  "version": "1.23.0",
   "description": "Party web app with four features: wall, rata, snatch and plaza.",
   "type": "module",
-  "main": "src/server.js",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/server.js",
-    "dev": "node --watch --disable-warning=ExperimentalWarning src/server.js",
-    "genkeys": "node scripts/generate-vapid.js",
-    "admin-token": "node --disable-warning=ExperimentalWarning scripts/print-admin-token.js",
-    "seed-demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js",
+    "genkeys": "npx -y web-push generate-vapid-keys",
     "test": "node scripts/run-tests.js",
     "test:ui": "node --disable-warning=ExperimentalWarning --test test/ui.test.js",
     "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true",
-    "screenshots": "node --disable-warning=ExperimentalWarning scripts/screenshots.js",
-    "reset-owner-faceid": "node --disable-warning=ExperimentalWarning scripts/reset-owner-faceid.js",
-    "deploy": "npx wrangler deploy"
+    "deploy": "npx wrangler deploy",
+    "dev": "npx wrangler dev"
   },
   "engines": {
     "node": ">=23.4"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.125.0",
-    "dotenv": "^16.4.7",
-    "express": "^5.2.1",
-    "multer": "^2.5.0",
-    "node-cron": "^4.6.0",
-    "pdfkit": "^0.19.1",
-    "web-push": "^3.6.7",
-    "yazl": "^3.3.1"
+    "pdfkit": "^0.19.1"
   },
   "devDependencies": {
     "playwright": "^1.62.0",

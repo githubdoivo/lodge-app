@@ -11,24 +11,16 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { chromium, devices } from 'playwright';
 
-const DB = join(tmpdir(), `appdoivo-sec-${process.pid}-${Date.now()}.sqlite`);
-process.env.ANTHROPIC_API_KEY = '';                       // never reach the real API
-process.env.TOKEN_SECRET ||= 'test-secret-not-used-anywhere-real';
-process.env.DB_FILE = DB;
-// These suites sign in as the owner with the plain key; the Face ID rule for owner and admins (APP-LG-001) has its own suite, test/passkeys.test.js.
-process.env.ADMIN_PASSKEY = 'off';
-process.env.ADMIN_NAME = 'Sec Owner';
-process.env.ENABLE_ADMIN_PROMOTION = 'true';
-process.env.ENABLE_PLAZA = 'true';
-process.env.ENABLE_MEMO = 'true';
-
-const { default: app, seedResult } = await import('../src/app.js');
-const { default: router } = await import('../src/routes.js');
-const { resetAuthAttempts } = await import('../src/rateLimit.js');
-const OWNER = seedResult.token;
+// Every route the app has, with its access level (behind login / owner only), saved from the old
+// Node router when the app moved to the Worker; the Worker must keep each one as strict.
+const routes = JSON.parse(readFileSync(new URL('./fixtures/routes.json', import.meta.url), 'utf8'));
+const { startWorker } = await import('./harness.js');
+const w = await startWorker({ ownerName: 'Sec Owner' });
+const OWNER = w.ownerKey;
+const resetAuthAttempts = () => { try { w.db.exec('DELETE FROM auth_attempts'); } catch { /* none yet */ } };
 let server, origin, base, guest, admin;
 
 async function call(method, path, { token, body, raw, timeout = 10000 } = {}) {
@@ -42,26 +34,12 @@ async function call(method, path, { token, body, raw, timeout = 10000 } = {}) {
 }
 
 // Every route the router knows, in order, with whether it sits behind login
-const routes = [];
-{
-  let behindAuth = false;
-  for (const layer of router.stack) {
-    if (!layer.route && layer.name === 'authenticate') behindAuth = true;
-    if (!layer.route) continue;
-    const guards = layer.route.stack.map((l) => l.name);
-    for (const m of Object.keys(layer.route.methods)) {
-      routes.push({ method: m.toUpperCase(), path: layer.route.path, behindAuth, owner: guards.includes('requireOwner') || layer.route.path.startsWith('/admin/users') });
-    }
-  }
-}
-const fill = (path, v = '1') => path.replace(/:night\b/g, '1').replace(/:day\b/g, '2026-09-18').replace(/:[a-zA-Z]+/g, v);
+const fill = (path, v = '1') => path.replace(/:night\b/g, 'swamp').replace(/:day\b/g, '2026-09-18').replace(/:[a-zA-Z]+/g, v);
 // Expensive or slow by design (video, AI backfill, demo seeding): their access is tested, not fuzzed
 const SLOW = /recap\/generate|translations\/backfill|seed-demo|seed-guests|\.zip$|\.pdf$/;
 
 before(async () => {
-  server = app.listen(0);
-  await once(server, 'listening');
-  origin = `http://127.0.0.1:${server.address().port}`;
+  origin = w.base;
   base = `${origin}/api`;
   const g = await call('POST', '/admin/users', { token: OWNER, body: { name: 'Guest Probe' } });
   guest = JSON.parse(g.text).token;
@@ -72,10 +50,7 @@ before(async () => {
   for (const t of [guest, admin]) await call('POST', '/me/tutorial-seen', { token: t });
 });
 
-after(() => {
-  server?.close();
-  for (const ext of ['', '-wal', '-shm']) { try { rmSync(DB + ext); } catch { /* ignore */ } }
-});
+after(async () => { await w.close(); });
 
 test('the router was read: there are routes behind login, admin routes and owner-only routes', () => {
   assert.ok(routes.filter((r) => r.behindAuth).length > 60);
@@ -152,7 +127,7 @@ for (const who of ['guest', 'owner']) {
       for (const id of badId) attempts.push({ path: fill(r.path, id), body: {} });
       for (const a of attempts) {
         let res;
-        if (!r.behindAuth) resetAuthAttempts();                       // public routes: the login limit is tested on its own
+        resetAuthAttempts();                                           // the sign-in limit is tested on its own
         try { res = await call(r.method, a.path || fill(r.path), { token, body: a.body, raw: a.raw }); }
         catch (e) { bad.push(`${r.method} ${r.path} hung or failed: ${e.message}`); continue; }
         if (res.status >= 500 || insides(res.text)) bad.push(`${r.method} ${a.path || r.path} ${JSON.stringify(a.raw ?? a.body)?.slice(0, 60)} -> ${res.status} ${res.text.slice(0, 80)}`);

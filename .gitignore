@@ -12,3 +12,6 @@ skills-lock.json
 feedback-screenshots/
 test-results/
 .wrangler/
+
+# wrangler dev local secrets
+.dev.vars
