@@ -7,3 +7,6 @@ set -e
 
 echo "Running tests before commit..."
 npm test
+
+# Remember which exact code passed, so ~/bin/ship does not run the same suite a second time.
+git write-tree > "$(git rev-parse --git-dir)/tests-passed"
